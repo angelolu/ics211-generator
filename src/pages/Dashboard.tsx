@@ -19,6 +19,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { Activity } from '../api/d4h';
 import { getActivities } from '../api/d4h';
+import { useDocumentTitle } from '../hooks/useDocumentTitle';
 
 type FilterType = 'all' | 'exercise' | 'event' | 'incident';
 
@@ -42,6 +43,7 @@ const TYPE_ICONS: Record<string, string> = {
 };
 
 export function Dashboard() {
+  useDocumentTitle('Dashboard');
   const [activities, setActivities] = useState<Activity[]>([]);
   const [filter, setFilter] = useState<FilterType>('all');
   const [isLoading, setIsLoading] = useState(true);

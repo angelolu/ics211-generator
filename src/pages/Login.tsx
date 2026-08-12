@@ -3,8 +3,10 @@ import { KeyRound, Loader2, LogIn, ShieldCheck } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { verifyTokenAndGetContext } from '../api/d4h';
+import { useDocumentTitle } from '../hooks/useDocumentTitle';
 
 export function Login() {
+  useDocumentTitle('Login');
   const [token, setToken] = useState('');
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);

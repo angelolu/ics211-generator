@@ -31,6 +31,7 @@ import { ICS211AForm } from '../components/ICS211AForm';
 import { ICS211BForm } from '../components/ICS211BForm';
 import { ICS211Form } from '../components/ICS211Form';
 import { useFormState, type FormRowData } from '../hooks/useFormState';
+import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { calculateHours } from '../utils/time';
 
 const FORM_TYPES = [
@@ -79,7 +80,8 @@ export function ExerciseDetails() {
   const isLocal = typeof id === 'string' && id.startsWith('local_');
   const activityName = isLocal && formState?.headers?.exerciseName?.value
     ? formState.headers.exerciseName.value
-    : exercise?.referenceDescription || exercise?.description || (exercise as { title?: string })?.title || 'Activity';
+    : exercise?.referenceDescription || exercise?.description || (exercise as { title?: string })?.title || 'Exercise Details';
+  useDocumentTitle(activityName);
   const activityType = exercise?.type || 'local';
   const currentFormLabel = FORM_TYPES.find(f => f.value === formType)?.label ?? formType;
 
