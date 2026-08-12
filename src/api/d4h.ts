@@ -15,6 +15,24 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error.response && error.response.status === 401) {
+      localStorage.removeItem('d4h_token');
+      localStorage.removeItem('d4h_context_id');
+      localStorage.removeItem('d4h_team_title');
+
+      if (!window.location.pathname.includes('/login')) {
+        const baseUrl = import.meta.env.BASE_URL || '/';
+        const loginUrl = (baseUrl.endsWith('/') ? baseUrl : baseUrl + '/') + 'login';
+        window.location.href = loginUrl;
+      }
+    }
+    return Promise.reject(error);
+  }
+);
+
 export interface WhoAmIResponse {
   members: {
     owner: {
@@ -108,7 +126,9 @@ export const getActivities = async (contextId: number): Promise<Activity[]> => {
     const cache = JSON.parse(localStorage.getItem('d4h_activity_cache') || '{}');
     allActivities.forEach(a => { cache[a.id] = a; });
     localStorage.setItem('d4h_activity_cache', JSON.stringify(cache));
-  } catch(e) {}
+  } catch (e) {
+    console.error('Failed to update activity cache', e);
+  }
 
   // Find activities from any time period that have local edits
   const editedActivities: Activity[] = [];
@@ -129,9 +149,11 @@ export const getActivities = async (contextId: number): Promise<Activity[]> => {
         const savedData = localStorage.getItem(key);
         if (savedData) {
           const formState = JSON.parse(savedData);
+          type CellLocallyEdited = { isEditedLocally?: boolean };
+          type RowLocallyEdited = { cells?: Record<string, CellLocallyEdited>; isDeleted?: boolean };
           const hasLocalChanges = 
-            (formState.headers && Object.values(formState.headers).some((c: any) => c.isEditedLocally)) ||
-            (formState.rows && formState.rows.some((r: any) => Object.values(r.cells).some((c: any) => c.isEditedLocally) || r.isDeleted));
+            (formState.headers && Object.values(formState.headers as Record<string, CellLocallyEdited>).some(c => c.isEditedLocally)) ||
+            (formState.rows && (formState.rows as RowLocallyEdited[]).some(r => (r.cells && Object.values(r.cells).some(c => c.isEditedLocally)) || r.isDeleted));
             
           if (hasLocalChanges) {
             if (cache[id]) {
@@ -300,9 +322,10 @@ export const getMemberQualifications = async (
 
     console.log('[Quals] Total awards fetched:', totalFetched);
     console.log('[Quals] Final qualificationsMap:', result);
-  } catch (e: any) {
+  } catch (e: unknown) {
+    const err = e as { response?: { status?: number; data?: unknown }; message?: string };
     console.error('[Quals] API call FAILED');
-    console.error('[Quals] Error:', e?.response?.status, e?.response?.data ?? e?.message ?? e);
+    console.error('[Quals] Error:', err?.response?.status, err?.response?.data ?? err?.message ?? err);
   }
 
   return result;
