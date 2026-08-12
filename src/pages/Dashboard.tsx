@@ -1,0 +1,562 @@
+import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
+import * as ToggleGroup from '@radix-ui/react-toggle-group';
+import * as Tooltip from '@radix-ui/react-tooltip';
+import { format } from 'date-fns';
+import {
+  Activity as ActivityIcon,
+  Calendar,
+  ChevronDown,
+  ChevronRight,
+  ExternalLink,
+  Layers,
+  LogIn,
+  LogOut,
+  MapPin,
+  RefreshCw,
+  Users,
+} from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import type { Activity } from '../api/d4h';
+import { getActivities } from '../api/d4h';
+
+type FilterType = 'all' | 'exercise' | 'event' | 'incident';
+
+export interface LocalRoster {
+  id: string;
+  title: string;
+  createdAt: string;
+  type: 'local';
+}
+
+const TYPE_LABELS: Record<string, string> = {
+  exercise: 'Exercise',
+  event: 'Event',
+  incident: 'Incident',
+};
+
+const TYPE_ICONS: Record<string, string> = {
+  exercise: '🏋️',
+  event: '📅',
+  incident: '🚨',
+};
+
+export function Dashboard() {
+  const [activities, setActivities] = useState<Activity[]>([]);
+  const [filter, setFilter] = useState<FilterType>('all');
+  const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [error, setError] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
+  const navigate = useNavigate();
+
+  const ITEMS_PER_PAGE = 12;
+  const teamTitle = localStorage.getItem('d4h_team_title') || 'Your Team';
+  const [localRosters, setLocalRosters] = useState<LocalRoster[]>([]);
+  const [contextId, setContextId] = useState(localStorage.getItem('d4h_context_id'));
+  const [viewMode, setViewMode] = useState<'activities' | 'local'>(() => {
+    if (!contextId) return 'local';
+    const saved = localStorage.getItem('fitnessqual_view_mode');
+    return (saved === 'activities' || saved === 'local') ? saved : 'activities';
+  });
+
+  useEffect(() => {
+    if (contextId) {
+      localStorage.setItem('fitnessqual_view_mode', viewMode);
+    }
+  }, [viewMode, contextId]);
+
+  const load = async (quiet = false) => {
+    if (!contextId) {
+      setIsLoading(false);
+      return;
+    }
+    if (!quiet) setIsLoading(true);
+    else setIsRefreshing(true);
+    setError('');
+    try {
+      const data = await getActivities(parseInt(contextId, 10));
+      setActivities(data);
+    } catch (err: any) {
+      if (err.response?.status === 401 || err.response?.status === 403) {
+        localStorage.removeItem('d4h_token');
+        localStorage.removeItem('d4h_context_id');
+        navigate('/login');
+      } else {
+        setError('Failed to load activities. Please try again.');
+      }
+    } finally {
+      setIsLoading(false);
+      setIsRefreshing(false);
+    }
+  };
+
+  useEffect(() => { load(); }, [contextId]);
+
+  useEffect(() => {
+    const saved = localStorage.getItem('fitnessqual_local_rosters');
+    if (saved) {
+      try { setLocalRosters(JSON.parse(saved)); } catch (e) { console.error(e); }
+    }
+  }, []);
+
+  const handleLogout = () => {
+    ['d4h_token', 'd4h_context_id', 'd4h_team_title'].forEach(k => localStorage.removeItem(k));
+    localStorage.setItem('d4h_skip_login', 'true');
+    setContextId(null);
+    setViewMode('local');
+  };
+
+  const filtered = activities.filter(a => filter === 'all' || a.type === filter);
+  const totalPages = Math.ceil(filtered.length / ITEMS_PER_PAGE);
+  const paginated = filtered.slice((currentPage - 1) * ITEMS_PER_PAGE, currentPage * ITEMS_PER_PAGE);
+
+  const counts = {
+    all: activities.length,
+    exercise: activities.filter(a => a.type === 'exercise').length,
+    event: activities.filter(a => a.type === 'event').length,
+    incident: activities.filter(a => a.type === 'incident').length,
+  };
+
+  return (
+    <Tooltip.Provider delayDuration={400}>
+      <div className="app-bg" style={{ minHeight: '100vh' }}>
+
+        {/* ── Header ───────────────────────────────────────── */}
+        <header className="app-header">
+          <div style={{ maxWidth: 1100, margin: '0 auto', padding: '0 24px', height: 60, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <div style={{
+                width: 34, height: 34, borderRadius: 9,
+                background: 'linear-gradient(145deg, #0d2d66, #061B44)',
+                border: '1px solid rgba(220,195,148,0.3)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                boxShadow: '0 2px 8px rgba(6,27,68,0.35)',
+              }}>
+                <ActivityIcon size={16} color="white" strokeWidth={2.5} />
+              </div>
+              <div>
+                <div style={{ fontWeight: 700, fontSize: '0.9375rem', color: 'white', lineHeight: 1.2 }}>
+                  {teamTitle}
+                </div>
+                <div style={{ fontSize: '0.7rem', color: 'rgba(220,195,148,0.7)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+                  ICS-211 Roster Generator
+                </div>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <DropdownMenu.Root>
+                <DropdownMenu.Trigger asChild>
+                  <button
+                    className="btn btn-sm"
+                    style={{
+                      gap: 6, padding: '6px 12px',
+                      background: 'rgba(255,255,255,0.1)',
+                      color: 'rgba(255,255,255,0.85)',
+                      border: '1px solid rgba(255,255,255,0.15)',
+                      borderRadius: 7,
+                    }}
+                  >
+                    D4H
+                    <ChevronDown size={14} />
+                  </button>
+                </DropdownMenu.Trigger>
+                <DropdownMenu.Portal>
+                  <DropdownMenu.Content
+                    className="select-content"
+                    align="end"
+                    sideOffset={6}
+                    style={{ padding: 4, minWidth: 200, zIndex: 100 }}
+                  >
+                    {contextId && (
+                      <DropdownMenu.Item
+                        onSelect={() => load(true)}
+                        disabled={isRefreshing}
+                        style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', borderRadius: 6, cursor: 'pointer', outline: 'none', fontSize: '0.875rem', color: 'var(--slate-12)' }}
+                        className="select-item"
+                      >
+                        <RefreshCw size={14} style={isRefreshing ? { animation: 'spin 1s linear infinite' } : {}} />
+                        Refresh
+                      </DropdownMenu.Item>
+                    )}
+                    
+                    <DropdownMenu.Item
+                      onSelect={() => window.open('https://team-manager.us.d4h.com/', '_blank')}
+                      style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', borderRadius: 6, cursor: 'pointer', outline: 'none', fontSize: '0.875rem', color: 'var(--slate-12)' }}
+                      className="select-item"
+                    >
+                      <ExternalLink size={14} />
+                      Go to D4H
+                    </DropdownMenu.Item>
+                    
+                    <DropdownMenu.Separator style={{ height: 1, backgroundColor: 'var(--slate-4)', margin: '4px 0' }} />
+                    
+                    <DropdownMenu.Item
+                      onSelect={() => {
+                        if (contextId) {
+                          handleLogout();
+                        } else {
+                          localStorage.removeItem('d4h_skip_login');
+                          navigate('/login');
+                        }
+                      }}
+                      style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', borderRadius: 6, cursor: 'pointer', outline: 'none', fontSize: '0.875rem', color: contextId ? 'var(--red-11)' : 'var(--slate-12)' }}
+                      className="select-item"
+                    >
+                      {contextId ? <LogOut size={14} /> : <LogIn size={14} />}
+                      {contextId ? 'Disconnect from D4H' : 'Connect to D4H'}
+                    </DropdownMenu.Item>
+                  </DropdownMenu.Content>
+                </DropdownMenu.Portal>
+              </DropdownMenu.Root>
+            </div>
+          </div>
+        </header>
+
+        {/* ── Main ─────────────────────────────────────────── */}
+        <main style={{ maxWidth: 1100, margin: '0 auto', padding: '32px 24px' }}>
+
+          {/* Page title + filter bar */}
+          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-end', justifyContent: 'space-between', gap: 16, marginBottom: 28 }}>
+            <div>
+              {contextId ? (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 8 }}>
+                  <ToggleGroup.Root
+                    type="single"
+                    value={viewMode}
+                    onValueChange={(v) => { if (v) setViewMode(v as 'activities' | 'local'); }}
+                    className="toggle-group"
+                  >
+                    <ToggleGroup.Item value="activities" className="toggle-item">
+                      D4H Activities
+                    </ToggleGroup.Item>
+                    <ToggleGroup.Item value="local" className="toggle-item">
+                      Locally Stored Rosters
+                    </ToggleGroup.Item>
+                  </ToggleGroup.Root>
+                </div>
+              ) : (
+                <h2 style={{ fontSize: '1.5rem', fontWeight: 800, letterSpacing: '-0.02em', color: 'var(--slate-12)', marginBottom: 8 }}>
+                  Locally Stored Rosters
+                </h2>
+              )}
+              {viewMode === 'activities' ? (
+                <p style={{ fontSize: '0.875rem', color: 'var(--slate-10)' }}>
+                  {isLoading ? 'Loading…' : `${filtered.length} activit${filtered.length === 1 ? 'y' : 'ies'} found`}
+                </p>
+              ) : (
+                <p style={{ fontSize: '0.875rem', color: 'var(--slate-10)' }}>
+                  {localRosters.length} roster{localRosters.length === 1 ? '' : 's'} stored locally
+                </p>
+              )}
+            </div>
+
+            {viewMode === 'activities' ? (
+              <ToggleGroup.Root
+                type="single"
+                value={filter}
+                onValueChange={(v) => { if (v) { setFilter(v as FilterType); setCurrentPage(1); } }}
+                className="toggle-group"
+              >
+                {(['all', 'exercise', 'event', 'incident'] as FilterType[]).map(type => (
+                  <ToggleGroup.Item
+                    key={type}
+                    value={type}
+                    className="toggle-item"
+                    style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+                  >
+                    {type !== 'all' && <span style={{ fontSize: 13 }}>{TYPE_ICONS[type]}</span>}
+                    <span>{type === 'all' ? 'All' : `${TYPE_LABELS[type]}s`}</span>
+                    <span style={{
+                      background: 'var(--slate-5)', color: 'var(--slate-11)',
+                      borderRadius: 100, padding: '1px 7px', fontSize: '0.7rem', fontWeight: 700,
+                    }}>
+                      {counts[type]}
+                    </span>
+                  </ToggleGroup.Item>
+                ))}
+              </ToggleGroup.Root>
+            ) : (
+              <button
+                className="btn btn-primary"
+                onClick={() => {
+                  const newId = `local_${Date.now()}`;
+                  const newRoster: LocalRoster = { id: newId, title: 'New Local Roster', createdAt: new Date().toISOString(), type: 'local' };
+                  const updated = [newRoster, ...localRosters];
+                  setLocalRosters(updated);
+                  localStorage.setItem('fitnessqual_local_rosters', JSON.stringify(updated));
+                  navigate(`/exercise/${newId}`, { state: { exercise: newRoster } });
+                }}
+              >
+                + Add Local Roster
+              </button>
+            )}
+          </div>
+
+          {/* Content */}
+          {viewMode === 'activities' ? (
+            isLoading ? (
+              <div style={{ display: 'grid', gap: 12 }}>
+                {[...Array(6)].map((_, i) => (
+                  <div key={i} className="card" style={{ height: 88, padding: 20, display: 'flex', alignItems: 'center', gap: 16 }}>
+                    <div className="skeleton" style={{ width: 58, height: 58, borderRadius: 10, flexShrink: 0 }} />
+                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      <div className="skeleton" style={{ height: 16, width: '45%' }} />
+                      <div className="skeleton" style={{ height: 12, width: '65%' }} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : error ? (
+              <div className="card" style={{ padding: 40, textAlign: 'center' }}>
+                <div style={{ fontSize: '2rem', marginBottom: 12 }}>⚠️</div>
+                <p style={{ color: 'var(--red-11)', fontWeight: 600, marginBottom: 16 }}>{error}</p>
+                <button className="btn btn-secondary" onClick={() => load()}>Try Again</button>
+              </div>
+            ) : filtered.length === 0 ? (
+              <div className="card" style={{ padding: 64, textAlign: 'center' }}>
+                <div style={{
+                  width: 64, height: 64, borderRadius: 16,
+                  background: 'var(--slate-3)', border: '1px solid var(--slate-5)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  margin: '0 auto 16px',
+                }}>
+                  <Layers size={28} style={{ color: 'var(--slate-8)' }} />
+                </div>
+                <h3 style={{ fontSize: '1.0625rem', fontWeight: 700, color: 'var(--slate-12)', marginBottom: 6 }}>
+                  No upcoming {filter === 'all' ? 'activities' : `${TYPE_LABELS[filter]}s`.toLowerCase()}
+                </h3>
+                <p style={{ fontSize: '0.875rem', color: 'var(--slate-10)' }}>
+                  Nothing scheduled yet. Check back later or switch filters.
+                </p>
+              </div>
+            ) : (
+              <>
+                <div style={{ display: 'grid', gap: 10 }}>
+                  {paginated.map((activity, idx) => (
+                    <ActivityCard
+                      key={`${activity.type}-${activity.id}`}
+                      activity={activity}
+                      idx={idx}
+                      onClick={() => navigate(`/exercise/${activity.id}`, { state: { exercise: activity } })}
+                    />
+                  ))}
+                </div>
+
+                {/* Pagination */}
+                {totalPages > 1 && (
+                  <div style={{
+                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                    marginTop: 24, padding: '14px 20px',
+                    background: 'var(--slate-2)', border: '1px solid var(--slate-5)',
+                    borderRadius: 10,
+                  }}>
+                    <span style={{ fontSize: '0.8125rem', color: 'var(--slate-10)' }}>
+                      Page {currentPage} of {totalPages} · {filtered.length} results
+                    </span>
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      <button
+                        className="btn btn-secondary btn-sm"
+                        disabled={currentPage === 1}
+                        onClick={() => { setCurrentPage(p => p - 1); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
+                      >
+                        Previous
+                      </button>
+                      <button
+                        className="btn btn-secondary btn-sm"
+                        disabled={currentPage === totalPages}
+                        onClick={() => { setCurrentPage(p => p + 1); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
+                      >
+                        Next
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </>
+            )
+          ) : (
+            localRosters.length === 0 ? (
+              <div className="card" style={{ padding: 64, textAlign: 'center' }}>
+                <div style={{
+                  width: 64, height: 64, borderRadius: 16,
+                  background: 'var(--slate-3)', border: '1px solid var(--slate-5)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  margin: '0 auto 16px',
+                }}>
+                  <Layers size={28} style={{ color: 'var(--slate-8)' }} />
+                </div>
+                <h3 style={{ fontSize: '1.0625rem', fontWeight: 700, color: 'var(--slate-12)', marginBottom: 6 }}>
+                  No local rosters
+                </h3>
+                <p style={{ fontSize: '0.875rem', color: 'var(--slate-10)' }}>
+                  Create a blank roster that is saved completely locally.
+                </p>
+              </div>
+            ) : (
+              <div style={{ display: 'grid', gap: 10 }}>
+                {localRosters.map((roster, idx) => (
+                  <div
+                    key={roster.id}
+                    className="card card-interactive animate-slide-up"
+                    style={{ padding: '16px 20px', display: 'flex', alignItems: 'center', gap: 16, animationDelay: `${idx * 30}ms`, animationFillMode: 'both' }}
+                    onClick={() => navigate(`/exercise/${roster.id}`, { state: { exercise: roster } })}
+                  >
+                    <div style={{
+                      minWidth: 56, height: 56, borderRadius: 12,
+                      background: '#F0FDF4', border: '1px solid #BBF7D0',
+                      display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+                      flexShrink: 0,
+                    }}>
+                      <div style={{ fontSize: '0.6875rem', fontWeight: 700, color: '#166534', textTransform: 'uppercase', letterSpacing: '0.06em', lineHeight: 1 }}>
+                        {format(new Date(roster.createdAt), 'MMM')}
+                      </div>
+                      <div style={{ fontSize: '1.375rem', fontWeight: 800, color: '#14532D', lineHeight: 1.1 }}>
+                        {format(new Date(roster.createdAt), 'd')}
+                      </div>
+                    </div>
+
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 5 }}>
+                        <span className="badge" style={{ background: '#DCFCE7', color: '#166534', border: '1px solid #BBF7D0' }}>Local</span>
+                        <span style={{ fontWeight: 600, fontSize: '0.9375rem', color: 'var(--slate-12)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                          {(() => {
+                            const saved = localStorage.getItem(`d4h_form_${roster.id}`);
+                            if (saved) {
+                              try {
+                                const parsed = JSON.parse(saved);
+                                if (parsed.headers?.exerciseName?.value) return parsed.headers.exerciseName.value;
+                              } catch (e) { }
+                            }
+                            return roster.title;
+                          })()}
+                        </span>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: '0.8125rem', color: 'var(--slate-10)' }}>
+                          <Calendar size={13} />
+                          <span>{format(new Date(roster.createdAt), 'h:mm a')}</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div style={{
+                      width: 32, height: 32, borderRadius: 8,
+                      background: 'var(--slate-3)', border: '1px solid var(--slate-5)',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      flexShrink: 0, color: 'var(--slate-9)',
+                      transition: 'all 0.15s',
+                    }}>
+                      <ChevronRight size={16} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )
+          )}
+        </main>
+      </div>
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+    </Tooltip.Provider>
+  );
+}
+
+function ActivityCard({ activity, idx, onClick }: { activity: Activity; idx: number; onClick: () => void }) {
+  const startDate = new Date(activity.startsAt);
+  const endDate = new Date(activity.endsAt);
+
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+  const isPast = startDate < todayStart;
+
+  const badgeClass = `badge badge-${activity.type}`;
+  const dotClass = `type-dot type-dot-${activity.type}`;
+
+  const location = activity.address?.street
+    ? [activity.address.street, activity.address.town].filter(Boolean).join(', ')
+    : activity.location?.coordinates
+      ? 'Location set'
+      : null;
+
+  return (
+    <div
+      className="card card-interactive animate-slide-up"
+      style={{ 
+        padding: '16px 20px', 
+        display: 'flex', 
+        alignItems: 'center', 
+        gap: 16, 
+        animationDelay: `${idx * 30}ms`, 
+        animationFillMode: 'both',
+        opacity: isPast ? 0.75 : 1,
+        filter: isPast ? 'grayscale(0.6)' : 'none',
+      }}
+      onClick={onClick}
+    >
+      {/* Date block */}
+      <div style={{
+        minWidth: 56, height: 56, borderRadius: 12,
+        background: isPast ? 'var(--slate-3)' : '#EEF2FF', 
+        border: isPast ? '1px solid var(--slate-5)' : '1px solid #C7D2FE',
+        display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+        flexShrink: 0,
+      }}>
+        <div style={{ fontSize: '0.6875rem', fontWeight: 700, color: isPast ? 'var(--slate-10)' : '#1a4480', textTransform: 'uppercase', letterSpacing: '0.06em', lineHeight: 1 }}>
+          {format(startDate, 'MMM')}
+        </div>
+        <div style={{ fontSize: '1.375rem', fontWeight: 800, color: isPast ? 'var(--slate-11)' : '#061B44', lineHeight: 1.1 }}>
+          {format(startDate, 'd')}
+        </div>
+      </div>
+
+      {/* Info */}
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 5 }}>
+          {!isPast && <div className={dotClass} />}
+          <span className={badgeClass} style={isPast ? { opacity: 0.8 } : {}}>{TYPE_LABELS[activity.type]}</span>
+          {isPast && (
+            <span style={{ 
+              background: 'var(--slate-4)', color: 'var(--slate-11)', 
+              fontSize: '0.65rem', fontWeight: 800, textTransform: 'uppercase', 
+              padding: '2px 6px', borderRadius: 4, letterSpacing: '0.04em' 
+            }}>
+              Past
+            </span>
+          )}
+          <span style={{ fontWeight: 600, fontSize: '0.9375rem', color: 'var(--slate-12)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {activity.referenceDescription || activity.description || `Unnamed ${activity.type}`}
+          </span>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: '0.8125rem', color: 'var(--slate-10)' }}>
+            <Calendar size={13} />
+            <span>{format(startDate, 'h:mm a')} – {format(endDate, 'h:mm a')}</span>
+          </div>
+          {location && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: '0.8125rem', color: 'var(--slate-10)', overflow: 'hidden' }}>
+              <MapPin size={13} style={{ flexShrink: 0 }} />
+              <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{location}</span>
+            </div>
+          )}
+          {activity.countAttendance !== undefined && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 5 }} className="badge badge-success">
+              <Users size={10} />
+              {activity.countAttendance} attending
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Chevron */}
+      <div style={{
+        width: 32, height: 32, borderRadius: 8,
+        background: 'var(--slate-3)', border: '1px solid var(--slate-5)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        flexShrink: 0, color: 'var(--slate-9)',
+        transition: 'all 0.15s',
+      }}>
+        <ChevronRight size={16} />
+      </div>
+    </div>
+  );
+}
