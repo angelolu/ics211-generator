@@ -104,6 +104,10 @@ export interface Attendee {
     resourceType: string;
     name?: string;
   };
+  startsAt?: string;
+  endsAt?: string;
+  duration?: number;
+  hours?: number;
 }
 
 // Full member info

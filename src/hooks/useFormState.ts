@@ -1,6 +1,14 @@
 import { useState, useEffect } from 'react';
 import { formatActivityLocation, getActivity, getAttendees, getMemberDetails, getMemberQualifications } from '../api/d4h';
 import { format } from 'date-fns';
+import { calculateHours } from '../utils/time';
+
+const formatD4HTime = (isoString?: string | null): string => {
+  if (!isoString) return '';
+  const d = new Date(isoString);
+  if (isNaN(d.getTime())) return '';
+  return format(d, 'HHmm');
+};
 
 export interface CellState {
   value: string;
@@ -206,22 +214,29 @@ export function useFormState(exerciseId: number | string | undefined, contextId:
         const rows: FormRowData[] = attData.map(att => {
           const memberDetail = memberData.find(m => m.id === att.member.id);
           const phone = memberDetail?.mobile?.phone || memberDetail?.home?.phone || memberDetail?.work?.phone || '';
+
+          const timeInStr = formatD4HTime(att.startsAt || exercise?.startsAt);
+          const timeOutStr = formatD4HTime(att.endsAt || exercise?.endsAt);
+          const hoursStr = (timeInStr && timeOutStr)
+            ? calculateHours(timeInStr, timeOutStr)
+            : (att.hours !== undefined ? `${att.hours}h` : (att.duration !== undefined ? `${att.duration}m` : ''));
+
           return {
             id: `member_${att.member.id}`,
             memberId: att.member.id,
             cells: {
               name: createCell(memberDetail?.name || 'Unknown Member'),
               phone: createCell(phone),
-              timeIn: createCell(''),
+              timeIn: createCell(timeInStr),
               weightStart: createCell(''),
               lap1Start: createCell(''),
               lap1End: createCell(''),
               lap2Start: createCell(''),
               lap2End: createCell(''),
               weightEnd: createCell(''),
-              timeOut: createCell(''),
+              timeOut: createCell(timeOutStr),
               tCard: createCell(''),
-              hours: createCell(''),
+              hours: createCell(hoursStr),
               additionalInfo: createCell(''),
               agencyTeam: createCell(''),
             }
@@ -442,6 +457,12 @@ export function useFormState(exerciseId: number | string | undefined, contextId:
           const remoteName = memberDetail?.name || 'Unknown Member';
           const remotePhone = memberDetail?.mobile?.phone || memberDetail?.home?.phone || memberDetail?.work?.phone || '';
           
+          const remoteTimeIn = formatD4HTime(att.startsAt || freshExercise?.startsAt || exercise?.startsAt);
+          const remoteTimeOut = formatD4HTime(att.endsAt || freshExercise?.endsAt || exercise?.endsAt);
+          const remoteHours = (remoteTimeIn && remoteTimeOut)
+            ? calculateHours(remoteTimeIn, remoteTimeOut)
+            : (att.hours !== undefined ? `${att.hours}h` : (att.duration !== undefined ? `${att.duration}m` : ''));
+          
           const existingRowIndex = newRows.findIndex(r => r.memberId === att.member.id);
           
           if (existingRowIndex >= 0) {
@@ -468,6 +489,9 @@ export function useFormState(exerciseId: number | string | undefined, contextId:
             
             updateCellLogic('name', remoteName);
             updateCellLogic('phone', remotePhone);
+            updateCellLogic('timeIn', remoteTimeIn);
+            updateCellLogic('timeOut', remoteTimeOut);
+            updateCellLogic('hours', remoteHours);
             
             newRows[existingRowIndex] = { ...row, cells: newCells };
           } else {
@@ -486,16 +510,16 @@ export function useFormState(exerciseId: number | string | undefined, contextId:
               cells: {
                 name: createCell(remoteName),
                 phone: createCell(remotePhone),
-                timeIn: createCell(''),
+                timeIn: createCell(remoteTimeIn),
                 weightStart: createCell(''),
                 lap1Start: createCell(''),
                 lap1End: createCell(''),
                 lap2Start: createCell(''),
                 lap2End: createCell(''),
                 weightEnd: createCell(''),
-                timeOut: createCell(''),
+                timeOut: createCell(remoteTimeOut),
                 tCard: createCell(''),
-                hours: createCell(''),
+                hours: createCell(remoteHours),
                 additionalInfo: createCell(''),
                 agencyTeam: createCell(''),
               }
