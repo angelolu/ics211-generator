@@ -26,7 +26,6 @@ import {
   LogIn,
   LogOut,
   MapPin,
-  RefreshCw,
   Users,
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
@@ -61,7 +60,6 @@ export function Dashboard() {
   const [activities, setActivities] = useState<Activity[]>([]);
   const [filter, setFilter] = useState<FilterType>('all');
   const [isLoading, setIsLoading] = useState(true);
-  const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   const navigate = useNavigate();
@@ -97,7 +95,6 @@ export function Dashboard() {
       return;
     }
     if (!quiet) setIsLoading(true);
-    else setIsRefreshing(true);
     setError('');
     try {
       let options: { startsAfter?: string; startsBefore?: string } | undefined = undefined;
@@ -123,11 +120,20 @@ export function Dashboard() {
       }
     } finally {
       setIsLoading(false);
-      setIsRefreshing(false);
     }
   };
 
   useEffect(() => { load(false, activitiesView, currentMonth); }, [contextId, activitiesView, currentMonth]);
+
+  useEffect(() => {
+    const handleWindowFocus = () => {
+      if (contextId) {
+        load(true, activitiesView, currentMonth);
+      }
+    };
+    window.addEventListener('focus', handleWindowFocus);
+    return () => window.removeEventListener('focus', handleWindowFocus);
+  }, [contextId, activitiesView, currentMonth]);
 
   const filtered = activities.filter(a => filter === 'all' || a.type === filter);
   const totalPages = Math.ceil(filtered.length / ITEMS_PER_PAGE);
@@ -180,7 +186,7 @@ export function Dashboard() {
                       borderRadius: 7,
                     }}
                   >
-                    D4H
+                    {contextId ? 'D4H connected' : 'D4H disconnected'}
                     <ChevronDown size={14} />
                   </button>
                 </DropdownMenu.Trigger>
@@ -191,18 +197,6 @@ export function Dashboard() {
                     sideOffset={6}
                     style={{ padding: 4, minWidth: 200, zIndex: 100 }}
                   >
-                    {contextId && (
-                      <DropdownMenu.Item
-                        onSelect={() => load(true)}
-                        disabled={isRefreshing}
-                        style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', borderRadius: 6, cursor: 'pointer', outline: 'none', fontSize: '0.875rem', color: 'var(--slate-12)' }}
-                        className="select-item"
-                      >
-                        <RefreshCw size={14} style={isRefreshing ? { animation: 'spin 1s linear infinite' } : {}} />
-                        Refresh
-                      </DropdownMenu.Item>
-                    )}
-                    
                     <DropdownMenu.Item
                       onSelect={() => window.open('https://team-manager.us.d4h.com/', '_blank')}
                       style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', borderRadius: 6, cursor: 'pointer', outline: 'none', fontSize: '0.875rem', color: 'var(--slate-12)' }}
@@ -211,9 +205,9 @@ export function Dashboard() {
                       <ExternalLink size={14} />
                       Go to D4H
                     </DropdownMenu.Item>
-                    
+
                     <DropdownMenu.Separator style={{ height: 1, backgroundColor: 'var(--slate-4)', margin: '4px 0' }} />
-                    
+
                     <DropdownMenu.Item
                       onSelect={() => {
                         if (contextId) {
@@ -230,7 +224,7 @@ export function Dashboard() {
                       className="select-item"
                     >
                       {contextId ? <LogOut size={14} /> : <LogIn size={14} />}
-                      {contextId ? 'Disconnect from D4H' : 'Connect to D4H'}
+                      {contextId ? 'Disconnect' : 'Connect'}
                     </DropdownMenu.Item>
                   </DropdownMenu.Content>
                 </DropdownMenu.Portal>
@@ -477,7 +471,7 @@ export function Dashboard() {
                   No local rosters
                 </h3>
                 <p style={{ fontSize: '0.875rem', color: 'var(--slate-10)' }}>
-                  Create a blank roster that is saved completely locally.
+                  Create a blank roster that is saved completely locally
                 </p>
               </div>
             ) : (
@@ -740,7 +734,6 @@ function CalendarView({
                         lineHeight: 1.25,
                       }}
                     >
-                      <div className={`type-dot type-dot-${activity.type}`} style={{ width: 6, height: 6, flexShrink: 0 }} />
                       <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontWeight: 500 }}>
                         {title}
                       </span>
@@ -772,12 +765,12 @@ function ActivityCard({ activity, idx, onClick }: { activity: Activity; idx: num
   return (
     <div
       className="card card-interactive animate-slide-up"
-      style={{ 
-        padding: '16px 20px', 
-        display: 'flex', 
-        alignItems: 'center', 
-        gap: 16, 
-        animationDelay: `${idx * 30}ms`, 
+      style={{
+        padding: '16px 20px',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 16,
+        animationDelay: `${idx * 30}ms`,
         animationFillMode: 'both',
         opacity: isPast ? 0.75 : 1,
         filter: isPast ? 'grayscale(0.6)' : 'none',
@@ -787,7 +780,7 @@ function ActivityCard({ activity, idx, onClick }: { activity: Activity; idx: num
       {/* Date block */}
       <div style={{
         minWidth: 56, height: 56, borderRadius: 12,
-        background: isPast ? 'var(--slate-3)' : '#EEF2FF', 
+        background: isPast ? 'var(--slate-3)' : '#EEF2FF',
         border: isPast ? '1px solid var(--slate-5)' : '1px solid #C7D2FE',
         display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
         flexShrink: 0,
@@ -806,10 +799,10 @@ function ActivityCard({ activity, idx, onClick }: { activity: Activity; idx: num
           {!isPast && <div className={dotClass} />}
           <span className={badgeClass} style={isPast ? { opacity: 0.8 } : {}}>{TYPE_LABELS[activity.type]}</span>
           {isPast && (
-            <span style={{ 
-              background: 'var(--slate-4)', color: 'var(--slate-11)', 
-              fontSize: '0.65rem', fontWeight: 800, textTransform: 'uppercase', 
-              padding: '2px 6px', borderRadius: 4, letterSpacing: '0.04em' 
+            <span style={{
+              background: 'var(--slate-4)', color: 'var(--slate-11)',
+              fontSize: '0.65rem', fontWeight: 800, textTransform: 'uppercase',
+              padding: '2px 6px', borderRadius: 4, letterSpacing: '0.04em'
             }}>
               Past
             </span>

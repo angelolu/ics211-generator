@@ -86,10 +86,10 @@ export function Login() {
             fontSize: '1.75rem', fontWeight: 800, color: 'white',
             letterSpacing: '-0.02em', marginBottom: 6,
           }}>
-            ICS-211 Roster Generator
+            ICS-211 Generator
           </h1>
           <p style={{ fontSize: '0.875rem', color: 'rgba(255,255,255,0.5)' }}>
-            Generate rosters from D4H
+            Connect to D4H to pull activity and roster info
           </p>
         </div>
 
@@ -122,9 +122,9 @@ export function Login() {
               </div>
             )}
             <div style={{ marginTop: 8, textAlign: 'right' }}>
-              <a 
-                href="https://myaccount.us.d4h.com/tokens" 
-                target="_blank" 
+              <a
+                href="https://myaccount.us.d4h.com/tokens"
+                target="_blank"
                 rel="noreferrer"
                 style={{ fontSize: '0.8125rem', color: 'rgba(220,195,148,0.9)', textDecoration: 'none' }}
                 onMouseEnter={e => e.currentTarget.style.textDecoration = 'underline'}
@@ -147,7 +147,7 @@ export function Login() {
                 : <><LogIn size={18} /> Connect to D4H</>
               }
             </button>
-            
+
             <button
               type="button"
               onClick={() => {
