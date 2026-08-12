@@ -62,6 +62,7 @@ export interface Attendee {
 export interface Member {
   id: number;
   name: string;
+  position?: string;
   mobile?: { phone: string };
   home?: { phone: string };
   work?: { phone: string };
@@ -217,9 +218,11 @@ export const getMemberDetails = async (contextId: number, memberIds: number[]): 
 export interface MemberQualificationAward {
   id: number;
   member: { id: number; resourceType: string };
-  qualification: { id: number; title: string; resourceType: string };
+  qualification: { id: number; title?: string; resourceType: string };
   awardedAt?: string;
   expiresAt?: string | null;
+  endsAt?: string | null;
+  startsAt?: string | null;
   resourceType: string;
 }
 
@@ -239,10 +242,23 @@ export const getMemberQualifications = async (
   const memberIdSet = new Set(memberIds);
   const now = new Date().toISOString();
 
-  console.log('[Quals] Fetching all team qualification awards for contextId:', contextId);
+  console.log('[Quals] Fetching qualification definitions & awards for contextId:', contextId);
 
   try {
-    // Paginate through all awards — fetch up to 250 per page
+    // 1. Fetch qualification definitions to map qualId -> title
+    const defsRes = await api.get<{ results: { id: number; title: string }[] }>(
+      `/team/${contextId}/member-qualifications`,
+      { params: { size: 250 } }
+    ).catch(() => ({ data: { results: [] } }));
+
+    const qualDefMap: Record<number, string> = {};
+    (defsRes.data.results ?? []).forEach((q) => {
+      if (q.id && q.title) {
+        qualDefMap[q.id] = q.title;
+      }
+    });
+
+    // 2. Paginate through all awards — fetch up to 250 per page
     let page = 1;
     const PAGE_SIZE = 250;
     let totalFetched = 0;
@@ -261,11 +277,19 @@ export const getMemberQualifications = async (
         const memberId = award.member?.id;
         // Only care about members in our roster
         if (!memberId || !memberIdSet.has(memberId)) return;
-        // Skip expired awards
-        if (award.expiresAt && award.expiresAt < now) return;
-        const title = award.qualification?.title;
+        // Skip expired awards (D4H v3 uses endsAt or expiresAt)
+        const expiration = award.endsAt || award.expiresAt;
+        if (expiration && expiration < now) return;
+
+        const qualId = award.qualification?.id;
+        const title = (qualId && qualDefMap[qualId]) || award.qualification?.title;
         if (!title) return;
-        result[memberId] = result[memberId] ? `${result[memberId]}, ${title}` : title;
+
+        // Prevent duplicate titles per member
+        const currentQuals = result[memberId] ? result[memberId].split(', ') : [];
+        if (!currentQuals.includes(title)) {
+          result[memberId] = result[memberId] ? `${result[memberId]}, ${title}` : title;
+        }
       });
 
       totalFetched += awards.length;

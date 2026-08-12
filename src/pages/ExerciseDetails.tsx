@@ -21,6 +21,7 @@ import {
   RefreshCw,
   RotateCcw,
   Trash2,
+  UserCheck,
 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
@@ -29,7 +30,7 @@ import type { Activity } from '../api/d4h';
 import { ICS211AForm } from '../components/ICS211AForm';
 import { ICS211BForm } from '../components/ICS211BForm';
 import { ICS211Form } from '../components/ICS211Form';
-import { useFormState } from '../hooks/useFormState';
+import { useFormState, type FormRowData } from '../hooks/useFormState';
 import { calculateHours } from '../utils/time';
 
 const FORM_TYPES = [
@@ -60,6 +61,7 @@ export function ExerciseDetails() {
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [showCalcHours, setShowCalcHours] = useState(false);
   const [showQualifications, setShowQualifications] = useState(false);
+  const [showPositions, setShowPositions] = useState(false);
   const [showValidation, setShowValidation] = useState(false);
   const [formType, setFormType] = useState(() => localStorage.getItem(`d4h_form_type_${id}`) || '211a');
 
@@ -69,7 +71,7 @@ export function ExerciseDetails() {
 
   const {
     formState, isLoading, isPulling, hasLocalChanges, hasConflicts,
-    qualificationsMap,
+    qualificationsMap, positionsMap,
     highlightChanges, setHighlightChanges, updateHeaderCell, updateRowCell,
     addBlankRows, resetChanges, fixConflicts, pullData, removeRow, restoreRow,
   } = useFormState(id ? (id.startsWith('local_') ? id : parseInt(id, 10)) : undefined, contextId, exercise, teamTitle);
@@ -77,7 +79,7 @@ export function ExerciseDetails() {
   const isLocal = typeof id === 'string' && id.startsWith('local_');
   const activityName = isLocal && formState?.headers?.exerciseName?.value
     ? formState.headers.exerciseName.value
-    : exercise?.referenceDescription || exercise?.description || (exercise as any)?.title || 'Activity';
+    : exercise?.referenceDescription || exercise?.description || (exercise as { title?: string })?.title || 'Activity';
   const activityType = exercise?.type || 'local';
   const currentFormLabel = FORM_TYPES.find(f => f.value === formType)?.label ?? formType;
 
@@ -91,7 +93,7 @@ export function ExerciseDetails() {
       const saved = localStorage.getItem('fitnessqual_local_rosters');
       if (saved) {
         let rosters = JSON.parse(saved);
-        rosters = rosters.filter((r: any) => r.id !== id);
+        rosters = rosters.filter((r: { id: string }) => r.id !== id);
         localStorage.setItem('fitnessqual_local_rosters', JSON.stringify(rosters));
       }
       localStorage.removeItem(`d4h_form_${id}`);
@@ -104,7 +106,7 @@ export function ExerciseDetails() {
 
   const handleExportCsv = () => {
     let headers: string[] = [];
-    let keys: any[] = [];
+    let keys: (keyof FormRowData['cells'])[] = [];
 
     if (formType === '211a') {
       headers = ['T CARD', 'NAME (PERSONNEL) -OR- DESCRIPTION (EQUIPMENT)', 'DATE/TIME IN', 'DATE/TIME OUT', 'HOURS', 'ADDITIONAL INFORMATION'];
@@ -132,7 +134,7 @@ export function ExerciseDetails() {
         if (key === 'hours' && showCalcHours) {
           return escapeCsv(calculateHours(row.cells.timeIn?.value || '', row.cells.timeOut?.value || ''));
         }
-        return escapeCsv((row.cells as Record<string, any>)[key]?.value || '');
+        return escapeCsv((row.cells as Record<keyof FormRowData['cells'], { value: string }>)[key]?.value || '');
       }).join(',')) || [];
 
     const csvContent = [headers.join(','), ...rows].join('\n');
@@ -311,8 +313,32 @@ export function ExerciseDetails() {
                         </Switch.Root>
                       </DropdownMenu.Item>
 
+                      {formType !== 'fitness' && (
+                        <DropdownMenu.Item
+                          onSelect={(e) => { e.preventDefault(); setShowQualifications(!showQualifications); }}
+                          style={{
+                            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                            padding: '8px 12px', borderRadius: 6, cursor: 'pointer', outline: 'none',
+                            fontSize: '0.875rem', color: 'var(--slate-12)',
+                          }}
+                          className="select-item no-print"
+                        >
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <Award size={14} style={{ color: 'var(--slate-9)' }} />
+                            Show qualifications
+                          </div>
+                          <Switch.Root
+                            checked={showQualifications}
+                            className="switch-root"
+                            style={{ pointerEvents: 'none' }}
+                          >
+                            <Switch.Thumb className="switch-thumb" />
+                          </Switch.Root>
+                        </DropdownMenu.Item>
+                      )}
+
                       <DropdownMenu.Item
-                        onSelect={(e) => { e.preventDefault(); setShowQualifications(!showQualifications); }}
+                        onSelect={(e) => { e.preventDefault(); setShowPositions(!showPositions); }}
                         style={{
                           display: 'flex', alignItems: 'center', justifyContent: 'space-between',
                           padding: '8px 12px', borderRadius: 6, cursor: 'pointer', outline: 'none',
@@ -321,11 +347,11 @@ export function ExerciseDetails() {
                         className="select-item no-print"
                       >
                         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                          <Award size={14} style={{ color: 'var(--slate-9)' }} />
-                          Show qualifications
+                          <UserCheck size={14} style={{ color: 'var(--slate-9)' }} />
+                          Show position
                         </div>
                         <Switch.Root
-                          checked={showQualifications}
+                          checked={showPositions}
                           className="switch-root"
                           style={{ pointerEvents: 'none' }}
                         >
@@ -461,7 +487,7 @@ export function ExerciseDetails() {
           </div>
         </header>
 
-        <main style={{ maxWidth: 1200, margin: '0 auto', padding: '24px 24px 0', printColorAdjust: 'exact' } as any}>
+        <main style={{ maxWidth: 1200, margin: '0 auto', padding: '24px 24px 0', WebkitPrintColorAdjust: 'exact', printColorAdjust: 'exact' } as React.CSSProperties}>
 
           {/* ── Config card ──────────────────────────────── */}
           <div className="card no-print" style={{ padding: '18px 24px', marginBottom: 20 }}>
@@ -566,18 +592,21 @@ export function ExerciseDetails() {
             }}>
               {formType === 'fitness' && (
                 <ICS211Form ref={componentRef} formState={formState} showCalcHours={showCalcHours} showValidation={showValidation}
+                  showPositions={showPositions} positionsMap={positionsMap}
                   highlightChanges={highlightChanges} activityType={activityType} onUpdateHeader={updateHeaderCell}
                   onUpdateRow={updateRowCell} onRemoveRow={removeRow} onRestoreRow={restoreRow} />
               )}
               {formType === '211a' && (
                 <ICS211AForm ref={componentRef} formState={formState} showCalcHours={showCalcHours}
                   showQualifications={showQualifications} qualificationsMap={qualificationsMap}
+                  showPositions={showPositions} positionsMap={positionsMap}
                   highlightChanges={highlightChanges} activityType={activityType} onUpdateHeader={updateHeaderCell}
                   onUpdateRow={updateRowCell} onRemoveRow={removeRow} onRestoreRow={restoreRow} />
               )}
               {formType === '211b' && (
                 <ICS211BForm ref={componentRef} formState={formState} showCalcHours={showCalcHours}
                   showQualifications={showQualifications} qualificationsMap={qualificationsMap}
+                  showPositions={showPositions} positionsMap={positionsMap}
                   highlightChanges={highlightChanges} activityType={activityType} onUpdateHeader={updateHeaderCell}
                   onUpdateRow={updateRowCell} onRemoveRow={removeRow} onRestoreRow={restoreRow} />
               )}

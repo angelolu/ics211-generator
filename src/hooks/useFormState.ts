@@ -81,6 +81,7 @@ export function useFormState(exerciseId: number | string | undefined, contextId:
   const [isLoading, setIsLoading] = useState(true);
   const [isPulling, setIsPulling] = useState(false);
   const [qualificationsMap, setQualificationsMap] = useState<Record<number, string>>({});
+  const [positionsMap, setPositionsMap] = useState<Record<number, string>>({});
   const [highlightChanges, setHighlightChanges] = useState(() => {
     return localStorage.getItem('d4h_highlight_changes') === 'true';
   });
@@ -135,6 +136,14 @@ export function useFormState(exerciseId: number | string | undefined, contextId:
             if (cachedMemberIds.length > 0) {
               getMemberQualifications(parseInt(contextId!, 10), cachedMemberIds)
                 .then(setQualificationsMap);
+              getMemberDetails(parseInt(contextId!, 10), cachedMemberIds)
+                .then(members => {
+                  const posMap: Record<number, string> = {};
+                  members.forEach(m => {
+                    if (m.id && m.position) posMap[m.id] = m.position;
+                  });
+                  setPositionsMap(posMap);
+                });
             }
           }
           return;
@@ -172,6 +181,11 @@ export function useFormState(exerciseId: number | string | undefined, contextId:
           memberIds.length > 0 ? getMemberQualifications(parseInt(contextId!, 10), memberIds) : Promise.resolve({}),
         ]);
         setQualificationsMap(qualMap);
+        const posMap: Record<number, string> = {};
+        memberData.forEach(m => {
+          if (m.id && m.position) posMap[m.id] = m.position;
+        });
+        setPositionsMap(posMap);
         
         const exerciseDate = exercise.startsAt ? format(new Date(exercise.startsAt), 'MM/dd/yyyy') : '';
         const exName = exercise.referenceDescription || exercise.description || 'Unnamed Exercise';
@@ -381,6 +395,11 @@ export function useFormState(exerciseId: number | string | undefined, contextId:
         memberIds.length > 0 ? getMemberQualifications(parseInt(contextId, 10), memberIds) : Promise.resolve({}),
       ]);
       setQualificationsMap(prev => ({ ...prev, ...qualMap }));
+      const posMap: Record<number, string> = {};
+      memberData.forEach(m => {
+        if (m.id && m.position) posMap[m.id] = m.position;
+      });
+      setPositionsMap(prev => ({ ...prev, ...posMap }));
       
       setFormState(prev => {
         if (!prev) return prev;
@@ -473,6 +492,7 @@ export function useFormState(exerciseId: number | string | undefined, contextId:
     hasLocalChanges,
     hasConflicts,
     qualificationsMap,
+    positionsMap,
     highlightChanges,
     setHighlightChanges,
     updateHeaderCell,

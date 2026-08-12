@@ -7,6 +7,8 @@ interface ICS211FormProps {
   activityType?: 'exercise' | 'event' | 'incident';
   showCalcHours?: boolean;
   showValidation?: boolean;
+  showPositions?: boolean;
+  positionsMap?: Record<number, string>;
   onUpdateHeader: (key: keyof FormHeaderData, value: string) => void;
   onUpdateRow: (rowId: string, colKey: keyof FormRowData['cells'], value: string) => void;
   onRemoveRow?: (rowId: string) => void;
@@ -17,7 +19,7 @@ import { calculateHours, calculateMinutesDiff, formatDuration } from '../utils/t
 import { EditableCell } from './EditableCell';
 
 export const ICS211Form = forwardRef<HTMLDivElement, ICS211FormProps>(
-  ({ formState, highlightChanges, activityType = 'exercise', showCalcHours = false, showValidation = false, onUpdateHeader, onUpdateRow, onRemoveRow, onRestoreRow }, ref) => {
+  ({ formState, highlightChanges, activityType = 'exercise', showCalcHours = false, showValidation = false, showPositions = false, positionsMap = {}, onUpdateHeader, onUpdateRow, onRemoveRow, onRestoreRow }, ref) => {
     const typeLabel = activityType === 'incident' ? 'INCIDENT' : activityType === 'event' ? 'EVENT' : 'EXERCISE';
 
     const [contextMenu, setContextMenu] = useState<{ x: number, y: number, actions: { label: string, onClick?: () => void, danger?: boolean, isInfo?: boolean, isError?: boolean, isSuccess?: boolean }[] } | null>(null);
@@ -100,8 +102,9 @@ export const ICS211Form = forwardRef<HTMLDivElement, ICS211FormProps>(
 
         <table className="w-full table-fixed border-collapse border-2 border-black text-xs print:text-[10px]">
           <colgroup>
-            <col style={{ width: showCalcHours ? '15%' : '18%' }} />
-            <col style={{ width: showCalcHours ? '11%' : '14%' }} />
+            <col style={{ width: showPositions ? (showCalcHours ? '13%' : '14%') : (showCalcHours ? '15%' : '18%') }} />
+            {showPositions && <col style={{ width: '12%' }} />}
+            <col style={{ width: showPositions ? (showCalcHours ? '9%' : '10%') : (showCalcHours ? '11%' : '14%') }} />
             <col style={{ width: '8.5%' }} />
             <col style={{ width: '8.5%' }} />
             <col style={{ width: '8.5%' }} />
@@ -114,7 +117,7 @@ export const ICS211Form = forwardRef<HTMLDivElement, ICS211FormProps>(
           </colgroup>
           <thead className="table-header-group">
             <tr>
-              <td colSpan={showCalcHours ? 11 : 10} className="p-0 border-0">
+              <td colSpan={(showCalcHours ? 11 : 10) + (showPositions ? 1 : 0)} className="p-0 border-0">
                 {/* Header Information Section */}
                 <div className="grid grid-cols-4 border-b-2 border-black">
                   <div className="col-span-1 border-r border-black p-2 flex flex-col justify-center items-center min-w-0">
@@ -203,8 +206,11 @@ export const ICS211Form = forwardRef<HTMLDivElement, ICS211FormProps>(
             </tr>
             {/* Column Headers */}
             <tr className="bg-gray-50/50 border-y-2 border-black">
-              <th className="w-[18%] border-r border-black py-1 px-2 text-[10px] font-semibold text-center">NAME</th>
-              <th className="w-[14%] border-r border-black py-1 px-2 text-[10px] font-semibold text-center">PHONE</th>
+              <th className="border-r border-black py-1 px-2 text-[10px] font-semibold text-center">NAME</th>
+              {showPositions && (
+                <th className="border-r border-black py-1 px-2 text-[10px] font-semibold text-center uppercase leading-tight bg-slate-100 text-slate-500 print:bg-transparent print:text-black">POSITION</th>
+              )}
+              <th className="border-r border-black py-1 px-2 text-[10px] font-semibold text-center">PHONE</th>
               <th className="w-[8.5%] border-r border-black py-1 px-2 text-[10px] font-semibold text-center">TIME IN</th>
               <th className="w-[8.5%] border-r border-black py-1 px-2 text-[10px] font-semibold text-center leading-tight">START<br />WEIGHT</th>
               <th className="w-[8.5%] border-r border-black py-1 px-2 text-[10px] font-semibold text-center leading-tight">LAP 1 START<br />TIME</th>
@@ -281,6 +287,13 @@ export const ICS211Form = forwardRef<HTMLDivElement, ICS211FormProps>(
                   <td className="border-r border-black p-1 px-2">
                     <EditableCell rowActions={rowActions} onContextMenuEvent={handleCellContextMenu} cell={row.cells.name} onChange={(v) => onUpdateRow(row.id, 'name', v)} highlightChanges={highlightChanges} className="font-medium break-words" />
                   </td>
+                  {showPositions && (
+                    <td className="border-r border-black p-1 px-2 bg-slate-50 text-slate-500 italic font-medium print:bg-transparent print:text-black print:not-italic print:font-normal">
+                      <div className="text-[10px] leading-tight break-words select-none pointer-events-none">
+                        {row.memberId ? (positionsMap[row.memberId] || '') : ''}
+                      </div>
+                    </td>
+                  )}
                   <td className="border-r border-black p-1 px-2">
                     <EditableCell rowActions={rowActions} onContextMenuEvent={handleCellContextMenu} cell={row.cells.phone} onChange={(v) => onUpdateRow(row.id, 'phone', v)} highlightChanges={highlightChanges} className="break-words" />
                   </td>
@@ -320,7 +333,7 @@ export const ICS211Form = forwardRef<HTMLDivElement, ICS211FormProps>(
 
           <tfoot className="table-footer-group">
             <tr>
-              <td colSpan={showCalcHours ? 11 : 10} className="p-0 border-0">
+              <td colSpan={(showCalcHours ? 11 : 10) + (showPositions ? 1 : 0)} className="p-0 border-0">
                 <div className="grid grid-cols-4 border-t-2 border-black mt-0">
                   <div className="col-span-1 border-r border-black py-0.5 px-2 flex flex-col justify-center items-start">
                     <div className="font-bold text-sm uppercase leading-tight">ICS 211 FIT</div>

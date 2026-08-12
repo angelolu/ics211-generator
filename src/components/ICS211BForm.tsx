@@ -10,6 +10,8 @@ interface ICS211FormProps {
   showCalcHours?: boolean;
   showQualifications?: boolean;
   qualificationsMap?: Record<number, string>;
+  showPositions?: boolean;
+  positionsMap?: Record<number, string>;
   onUpdateHeader: (key: keyof FormHeaderData, value: string) => void;
   onUpdateRow: (rowId: string, colKey: keyof FormRowData['cells'], value: string) => void;
   onRemoveRow?: (rowId: string) => void;
@@ -17,7 +19,7 @@ interface ICS211FormProps {
 }
 
 export const ICS211BForm = forwardRef<HTMLDivElement, ICS211FormProps>(
-  ({ formState, highlightChanges, activityType = 'incident', showCalcHours = false, showQualifications = false, qualificationsMap = {}, onUpdateHeader, onUpdateRow, onRemoveRow, onRestoreRow }, ref) => {
+  ({ formState, highlightChanges, activityType = 'incident', showCalcHours = false, showQualifications = false, qualificationsMap = {}, showPositions = false, positionsMap = {}, onUpdateHeader, onUpdateRow, onRemoveRow, onRestoreRow }, ref) => {
     const typeLabel = activityType === 'exercise' ? 'EXERCISE' : activityType === 'event' ? 'EVENT' : 'INCIDENT';
 
     const [contextMenu, setContextMenu] = useState<{ x: number, y: number, actions: { label: string, onClick?: () => void, danger?: boolean, isInfo?: boolean, isError?: boolean, isSuccess?: boolean }[] } | null>(null);
@@ -98,17 +100,18 @@ export const ICS211BForm = forwardRef<HTMLDivElement, ICS211FormProps>(
         <table className="w-full table-fixed border-collapse border-2 border-black text-xs print:text-[10px]">
           <colgroup>
             <col style={{ width: '4%' }} />
-            <col style={{ width: showQualifications ? '18%' : '26%' }} />
-            {showQualifications && <col style={{ width: '14%' }} />}
-            <col style={{ width: '20%' }} />
+            <col style={{ width: (showQualifications && showPositions) ? '14%' : (showQualifications || showPositions) ? '18%' : '26%' }} />
+            {showQualifications && <col style={{ width: '12%' }} />}
+            {showPositions && <col style={{ width: '12%' }} />}
+            <col style={{ width: '18%' }} />
             <col style={{ width: '10%' }} />
             <col style={{ width: '10%' }} />
             <col style={{ width: '10%' }} />
-            <col style={{ width: showQualifications ? '14%' : '20%' }} />
+            <col style={{ width: (showQualifications && showPositions) ? '12%' : (showQualifications || showPositions) ? '16%' : '20%' }} />
           </colgroup>
           <thead className="table-header-group">
             <tr>
-              <td colSpan={7} className="p-0 border-0">
+              <td colSpan={7 + (showQualifications ? 1 : 0) + (showPositions ? 1 : 0)} className="p-0 border-0">
                 <div className="grid grid-cols-4 border-b-2 border-black">
                   <div className="col-span-1 border-r border-black p-2 flex flex-col justify-center items-center min-w-0">
                     <h1 className="font-bold text-lg leading-tight uppercase text-center">Check In List</h1>
@@ -139,6 +142,9 @@ export const ICS211BForm = forwardRef<HTMLDivElement, ICS211FormProps>(
               <th className="border-r border-black py-1 px-2 text-[10px] font-semibold text-center leading-tight uppercase">NAME (PERSONNEL) -OR-<br />DESCRIPTION (EQUIPMENT)</th>
               {showQualifications && (
                 <th className="border-r border-black py-1 px-2 text-[10px] font-semibold text-center uppercase leading-tight bg-slate-100 text-slate-500 print:bg-transparent print:text-black">QUALIFICATIONS</th>
+              )}
+              {showPositions && (
+                <th className="border-r border-black py-1 px-2 text-[10px] font-semibold text-center uppercase leading-tight bg-slate-100 text-slate-500 print:bg-transparent print:text-black">POSITION</th>
               )}
               <th className="border-r border-black py-1 px-2 text-[10px] font-semibold text-center uppercase leading-tight">AGENCY/TEAM</th>
               <th className="border-r border-black py-1 px-2 text-[10px] font-semibold text-center uppercase leading-tight">TIME<br />IN</th>
@@ -175,6 +181,13 @@ export const ICS211BForm = forwardRef<HTMLDivElement, ICS211FormProps>(
                       </div>
                     </td>
                   )}
+                  {showPositions && (
+                    <td className="border-r border-black p-1 px-2 bg-slate-50 text-slate-500 italic font-medium print:bg-transparent print:text-black print:not-italic print:font-normal">
+                      <div className="text-[10px] leading-tight break-words select-none pointer-events-none">
+                        {row.memberId ? (positionsMap[row.memberId] || '') : ''}
+                      </div>
+                    </td>
+                  )}
                   <td className="border-r border-black p-1 px-2">
                     <EditableCell rowActions={rowActions} onContextMenuEvent={handleCellContextMenu} cell={row.cells.agencyTeam} onChange={(v) => onUpdateRow(row.id, 'agencyTeam', v)} highlightChanges={highlightChanges} className="break-words" />
                   </td>
@@ -203,7 +216,7 @@ export const ICS211BForm = forwardRef<HTMLDivElement, ICS211FormProps>(
 
           <tfoot className="table-footer-group">
             <tr>
-              <td colSpan={7} className="p-0 border-0">
+              <td colSpan={7 + (showQualifications ? 1 : 0) + (showPositions ? 1 : 0)} className="p-0 border-0">
                 <div className="grid grid-cols-4 border-t-2 border-black mt-0">
                   <div className="col-span-1 border-r border-black py-0.5 px-2 flex flex-col justify-center items-start">
                     <div className="font-bold text-sm uppercase leading-tight">ICS 211B</div>
