@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { getAttendees, getMemberDetails, getMemberQualifications } from '../api/d4h';
+import { formatActivityLocation, getActivity, getAttendees, getMemberDetails, getMemberQualifications } from '../api/d4h';
 import { format } from 'date-fns';
 
 export interface CellState {
@@ -189,7 +189,7 @@ export function useFormState(exerciseId: number | string | undefined, contextId:
         
         const exerciseDate = exercise.startsAt ? format(new Date(exercise.startsAt), 'MM/dd/yyyy') : '';
         const exName = exercise.referenceDescription || exercise.description || 'Unnamed Exercise';
-        const checkInLoc = exercise.address?.street || '';
+        const checkInLoc = formatActivityLocation(exercise);
 
         const headers: FormHeaderData = {
           exerciseName: createCell(exName),
@@ -388,7 +388,10 @@ export function useFormState(exerciseId: number | string | undefined, contextId:
     if (!exerciseId || !contextId) return;
     setIsPulling(true);
     try {
-      const attData = await getAttendees(parseInt(contextId, 10), exerciseId as number);
+      const [attData, freshExercise] = await Promise.all([
+        getAttendees(parseInt(contextId, 10), exerciseId as number),
+        getActivity(parseInt(contextId, 10), exerciseId as number, exercise?.type),
+      ]);
       const memberIds = attData.map(a => a.member.id);
       const [memberData, qualMap] = await Promise.all([
         memberIds.length > 0 ? getMemberDetails(parseInt(contextId, 10), memberIds) : Promise.resolve([]),
@@ -404,6 +407,33 @@ export function useFormState(exerciseId: number | string | undefined, contextId:
       setFormState(prev => {
         if (!prev) return prev;
         
+        const newHeaders = { ...prev.headers };
+
+        if (freshExercise) {
+          const remoteExName = freshExercise.referenceDescription || freshExercise.description || 'Unnamed Exercise';
+          const remoteDate = freshExercise.startsAt ? format(new Date(freshExercise.startsAt), 'MM/dd/yyyy') : '';
+          const remoteExNumber = freshExercise.id.toString();
+          const remoteCheckInLoc = formatActivityLocation(freshExercise);
+
+          const updateHeaderCellLogic = (headerKey: keyof FormHeaderData, remoteVal: string) => {
+            const cell = newHeaders[headerKey];
+            if (cell.originalValue !== remoteVal) {
+              if (!cell.isEditedLocally) {
+                newHeaders[headerKey] = { ...cell, value: remoteVal, originalValue: remoteVal };
+              } else if (cell.value !== remoteVal) {
+                newHeaders[headerKey] = { ...cell, conflictValue: remoteVal };
+              } else {
+                newHeaders[headerKey] = { ...cell, originalValue: remoteVal, isEditedLocally: false };
+              }
+            }
+          };
+
+          updateHeaderCellLogic('exerciseName', remoteExName);
+          updateHeaderCellLogic('date', remoteDate);
+          updateHeaderCellLogic('exerciseNumber', remoteExNumber);
+          updateHeaderCellLogic('checkInLocation', remoteCheckInLoc);
+        }
+
         const newRows = [...prev.rows];
         
         // Match members
@@ -475,7 +505,7 @@ export function useFormState(exerciseId: number | string | undefined, contextId:
           }
         });
         
-        return { ...prev, rows: newRows };
+        return { ...prev, headers: newHeaders, rows: newRows };
       });
       
     } catch (e) {

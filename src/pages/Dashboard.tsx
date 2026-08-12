@@ -17,8 +17,8 @@ import {
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { formatActivityLocation, getActivities } from '../api/d4h';
 import type { Activity } from '../api/d4h';
-import { getActivities } from '../api/d4h';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 
 type FilterType = 'all' | 'exercise' | 'event' | 'incident';
@@ -474,11 +474,7 @@ function ActivityCard({ activity, idx, onClick }: { activity: Activity; idx: num
   const badgeClass = `badge badge-${activity.type}`;
   const dotClass = `type-dot type-dot-${activity.type}`;
 
-  const location = activity.address?.street
-    ? [activity.address.street, activity.address.town].filter(Boolean).join(', ')
-    : activity.location?.coordinates
-      ? 'Location set'
-      : null;
+  const location = formatActivityLocation(activity) || null;
 
   return (
     <div

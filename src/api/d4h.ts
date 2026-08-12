@@ -66,6 +66,36 @@ export interface Activity {
   countAttendance?: number;
 }
 
+export function formatActivityLocation(activity?: Partial<Activity>): string {
+  if (!activity) return '';
+
+  const street = activity.address?.street?.trim();
+  const town = activity.address?.town?.trim();
+  const region = activity.address?.region?.trim();
+
+  const addressParts = [street, town].filter(Boolean);
+  if (addressParts.length > 0) {
+    return addressParts.join(', ');
+  }
+
+  if (region) {
+    return region;
+  }
+
+  if (
+    activity.location?.coordinates &&
+    Array.isArray(activity.location.coordinates) &&
+    activity.location.coordinates.length >= 2
+  ) {
+    const [lng, lat] = activity.location.coordinates;
+    if (lat !== 0 || lng !== 0) {
+      return `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
+    }
+  }
+
+  return '';
+}
+
 export interface Attendee {
   id: number;
   status: string; // 'ATTENDING', 'REQUESTED', etc.
@@ -206,6 +236,24 @@ export const getActivities = async (contextId: number): Promise<Activity[]> => {
   const uniqueActivities = Array.from(new Map(finalActivities.map(a => [a.id, a])).values());
 
   return uniqueActivities;
+};
+
+export const getActivity = async (contextId: number, id: number, type?: string): Promise<Activity | null> => {
+  if (type === 'exercise' || type === 'event' || type === 'incident') {
+    const res = await api.get<Activity>(`/team/${contextId}/${type}s/${id}`).catch(() => null);
+    if (res?.data && res.data.id) return { ...res.data, type: type as any };
+  }
+
+  let res = await api.get<Activity>(`/team/${contextId}/exercises/${id}`).catch(() => null);
+  if (res?.data && res.data.id) return { ...res.data, type: 'exercise' as const };
+  
+  res = await api.get<Activity>(`/team/${contextId}/events/${id}`).catch(() => null);
+  if (res?.data && res.data.id) return { ...res.data, type: 'event' as const };
+  
+  res = await api.get<Activity>(`/team/${contextId}/incidents/${id}`).catch(() => null);
+  if (res?.data && res.data.id) return { ...res.data, type: 'incident' as const };
+
+  return null;
 };
 
 export const getAttendees = async (contextId: number, exerciseId: number): Promise<Attendee[]> => {
