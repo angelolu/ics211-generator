@@ -10,6 +10,40 @@ const formatD4HTime = (isoString?: string | null): string => {
   return format(d, 'HHmm');
 };
 
+const calculateD4HHours = (
+  startIso?: string | null,
+  endIso?: string | null,
+  timeInStr?: string,
+  timeOutStr?: string,
+  attHours?: number,
+  attDuration?: number
+): string => {
+  if (startIso && endIso) {
+    const s = new Date(startIso).getTime();
+    const e = new Date(endIso).getTime();
+    if (!isNaN(s) && !isNaN(e) && e > s) {
+      const diffMins = Math.round((e - s) / (1000 * 60));
+      const h = Math.floor(diffMins / 60);
+      const m = diffMins % 60;
+      if (m === 0) return `${h}h`;
+      return `${h}h ${m}m`;
+    }
+  }
+  if (timeInStr && timeOutStr) {
+    return calculateHours(timeInStr, timeOutStr);
+  }
+  if (attHours !== undefined && attHours !== null) {
+    return `${attHours}h`;
+  }
+  if (attDuration !== undefined && attDuration !== null) {
+    const h = Math.floor(attDuration / 60);
+    const m = attDuration % 60;
+    if (m === 0) return `${h}h`;
+    return `${h}h ${m}m`;
+  }
+  return '';
+};
+
 export interface CellState {
   value: string;
   isEditedLocally: boolean;
@@ -215,11 +249,11 @@ export function useFormState(exerciseId: number | string | undefined, contextId:
           const memberDetail = memberData.find(m => m.id === att.member.id);
           const phone = memberDetail?.mobile?.phone || memberDetail?.home?.phone || memberDetail?.work?.phone || '';
 
-          const timeInStr = formatD4HTime(att.startsAt || exercise?.startsAt);
-          const timeOutStr = formatD4HTime(att.endsAt || exercise?.endsAt);
-          const hoursStr = (timeInStr && timeOutStr)
-            ? calculateHours(timeInStr, timeOutStr)
-            : (att.hours !== undefined ? `${att.hours}h` : (att.duration !== undefined ? `${att.duration}m` : ''));
+          const startIso = att.startsAt || exercise?.startsAt;
+          const endIso = att.endsAt || exercise?.endsAt;
+          const timeInStr = formatD4HTime(startIso);
+          const timeOutStr = formatD4HTime(endIso);
+          const hoursStr = calculateD4HHours(startIso, endIso, timeInStr, timeOutStr, att.hours, att.duration);
 
           return {
             id: `member_${att.member.id}`,
@@ -457,11 +491,11 @@ export function useFormState(exerciseId: number | string | undefined, contextId:
           const remoteName = memberDetail?.name || 'Unknown Member';
           const remotePhone = memberDetail?.mobile?.phone || memberDetail?.home?.phone || memberDetail?.work?.phone || '';
           
-          const remoteTimeIn = formatD4HTime(att.startsAt || freshExercise?.startsAt || exercise?.startsAt);
-          const remoteTimeOut = formatD4HTime(att.endsAt || freshExercise?.endsAt || exercise?.endsAt);
-          const remoteHours = (remoteTimeIn && remoteTimeOut)
-            ? calculateHours(remoteTimeIn, remoteTimeOut)
-            : (att.hours !== undefined ? `${att.hours}h` : (att.duration !== undefined ? `${att.duration}m` : ''));
+          const startIso = att.startsAt || freshExercise?.startsAt || exercise?.startsAt;
+          const endIso = att.endsAt || freshExercise?.endsAt || exercise?.endsAt;
+          const remoteTimeIn = formatD4HTime(startIso);
+          const remoteTimeOut = formatD4HTime(endIso);
+          const remoteHours = calculateD4HHours(startIso, endIso, remoteTimeIn, remoteTimeOut, att.hours, att.duration);
           
           const existingRowIndex = newRows.findIndex(r => r.memberId === att.member.id);
           
