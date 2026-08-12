@@ -457,6 +457,39 @@
   border-radius: 6px;
 }
 
+/* ── Calendar Event Pills ────────────────────────────── */
+.calendar-event-pill {
+  transition: all 0.15s ease;
+}
+.calendar-event-pill:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 2px 6px rgba(6,27,68,0.12);
+}
+.calendar-event-pill-exercise {
+  background: var(--navy-1);
+  color: var(--navy-9);
+  border: 1px solid var(--navy-2);
+}
+.calendar-event-pill-exercise:hover {
+  background: var(--navy-2);
+}
+.calendar-event-pill-event {
+  background: var(--teal-2);
+  color: var(--teal-9);
+  border: 1px solid var(--teal-3);
+}
+.calendar-event-pill-event:hover {
+  background: var(--teal-3);
+}
+.calendar-event-pill-incident {
+  background: var(--red-3);
+  color: var(--red-11);
+  border: 1px solid var(--red-6);
+}
+.calendar-event-pill-incident:hover {
+  background: var(--red-6);
+}
+
 /* ── Print ────────────────────────────────────────────── */
 @media print {
   .no-print { display: none !important; }

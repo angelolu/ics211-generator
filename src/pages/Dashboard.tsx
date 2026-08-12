@@ -1,14 +1,28 @@
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import * as ToggleGroup from '@radix-ui/react-toggle-group';
 import * as Tooltip from '@radix-ui/react-tooltip';
-import { format } from 'date-fns';
+import {
+  addMonths,
+  eachDayOfInterval,
+  endOfMonth,
+  endOfWeek,
+  format,
+  isSameDay,
+  isSameMonth,
+  isToday,
+  startOfMonth,
+  startOfWeek,
+  subMonths,
+} from 'date-fns';
 import {
   Activity as ActivityIcon,
   Calendar,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
   ExternalLink,
   Layers,
+  List,
   LogIn,
   LogOut,
   MapPin,
@@ -61,6 +75,11 @@ export function Dashboard() {
     const saved = localStorage.getItem('fitnessqual_view_mode');
     return (saved === 'activities' || saved === 'local') ? saved : 'activities';
   });
+  const [activitiesView, setActivitiesView] = useState<'list' | 'calendar'>(() => {
+    const saved = localStorage.getItem('fitnessqual_d4h_activities_view');
+    return (saved === 'calendar' || saved === 'list') ? saved : 'calendar';
+  });
+  const [currentMonth, setCurrentMonth] = useState<Date>(new Date());
 
   useEffect(() => {
     if (contextId) {
@@ -68,7 +87,11 @@ export function Dashboard() {
     }
   }, [viewMode, contextId]);
 
-  const load = async (quiet = false) => {
+  useEffect(() => {
+    localStorage.setItem('fitnessqual_d4h_activities_view', activitiesView);
+  }, [activitiesView]);
+
+  const load = async (quiet = false, targetView = activitiesView, targetMonth = currentMonth) => {
     if (!contextId) {
       setIsLoading(false);
       return;
@@ -77,7 +100,18 @@ export function Dashboard() {
     else setIsRefreshing(true);
     setError('');
     try {
-      const data = await getActivities(parseInt(contextId, 10));
+      let options: { startsAfter?: string; startsBefore?: string } | undefined = undefined;
+
+      if (targetView === 'calendar') {
+        const gridStart = startOfWeek(startOfMonth(targetMonth));
+        const gridEnd = endOfWeek(endOfMonth(targetMonth));
+        options = {
+          startsAfter: gridStart.toISOString(),
+          startsBefore: gridEnd.toISOString(),
+        };
+      }
+
+      const data = await getActivities(parseInt(contextId, 10), options);
       setActivities(data);
     } catch (err: any) {
       if (err.response?.status === 401 || err.response?.status === 403) {
@@ -93,21 +127,7 @@ export function Dashboard() {
     }
   };
 
-  useEffect(() => { load(); }, [contextId]);
-
-  useEffect(() => {
-    const saved = localStorage.getItem('fitnessqual_local_rosters');
-    if (saved) {
-      try { setLocalRosters(JSON.parse(saved)); } catch (e) { console.error(e); }
-    }
-  }, []);
-
-  const handleLogout = () => {
-    ['d4h_token', 'd4h_context_id', 'd4h_team_title'].forEach(k => localStorage.removeItem(k));
-    localStorage.setItem('d4h_skip_login', 'true');
-    setContextId(null);
-    setViewMode('local');
-  };
+  useEffect(() => { load(false, activitiesView, currentMonth); }, [contextId, activitiesView, currentMonth]);
 
   const filtered = activities.filter(a => filter === 'all' || a.type === filter);
   const totalPages = Math.ceil(filtered.length / ITEMS_PER_PAGE);
@@ -197,7 +217,10 @@ export function Dashboard() {
                     <DropdownMenu.Item
                       onSelect={() => {
                         if (contextId) {
-                          handleLogout();
+                          ['d4h_token', 'd4h_context_id', 'd4h_team_title'].forEach(k => localStorage.removeItem(k));
+                          localStorage.setItem('d4h_skip_login', 'true');
+                          setContextId(null);
+                          setViewMode('local');
                         } else {
                           localStorage.removeItem('d4h_skip_login');
                           navigate('/login');
@@ -220,65 +243,72 @@ export function Dashboard() {
         <main style={{ maxWidth: 1100, margin: '0 auto', padding: '32px 24px' }}>
 
           {/* Page title + filter bar */}
-          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-end', justifyContent: 'space-between', gap: 16, marginBottom: 28 }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 16, marginBottom: 28 }}>
             <div>
               {contextId ? (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 8 }}>
-                  <ToggleGroup.Root
-                    type="single"
-                    value={viewMode}
-                    onValueChange={(v) => { if (v) setViewMode(v as 'activities' | 'local'); }}
-                    className="toggle-group"
-                  >
-                    <ToggleGroup.Item value="activities" className="toggle-item">
-                      D4H Activities
-                    </ToggleGroup.Item>
-                    <ToggleGroup.Item value="local" className="toggle-item">
-                      Locally Stored Rosters
-                    </ToggleGroup.Item>
-                  </ToggleGroup.Root>
-                </div>
+                <ToggleGroup.Root
+                  type="single"
+                  value={viewMode}
+                  onValueChange={(v) => { if (v) setViewMode(v as 'activities' | 'local'); }}
+                  className="toggle-group"
+                >
+                  <ToggleGroup.Item value="activities" className="toggle-item">
+                    D4H Activities
+                  </ToggleGroup.Item>
+                  <ToggleGroup.Item value="local" className="toggle-item">
+                    Locally Stored
+                  </ToggleGroup.Item>
+                </ToggleGroup.Root>
               ) : (
-                <h2 style={{ fontSize: '1.5rem', fontWeight: 800, letterSpacing: '-0.02em', color: 'var(--slate-12)', marginBottom: 8 }}>
-                  Locally Stored Rosters
+                <h2 style={{ fontSize: '1.5rem', fontWeight: 800, letterSpacing: '-0.02em', color: 'var(--slate-12)' }}>
+                  Locally Stored
                 </h2>
-              )}
-              {viewMode === 'activities' ? (
-                <p style={{ fontSize: '0.875rem', color: 'var(--slate-10)' }}>
-                  {isLoading ? 'Loading…' : `${filtered.length} activit${filtered.length === 1 ? 'y' : 'ies'} found`}
-                </p>
-              ) : (
-                <p style={{ fontSize: '0.875rem', color: 'var(--slate-10)' }}>
-                  {localRosters.length} roster{localRosters.length === 1 ? '' : 's'} stored locally
-                </p>
               )}
             </div>
 
             {viewMode === 'activities' ? (
-              <ToggleGroup.Root
-                type="single"
-                value={filter}
-                onValueChange={(v) => { if (v) { setFilter(v as FilterType); setCurrentPage(1); } }}
-                className="toggle-group"
-              >
-                {(['all', 'exercise', 'event', 'incident'] as FilterType[]).map(type => (
-                  <ToggleGroup.Item
-                    key={type}
-                    value={type}
-                    className="toggle-item"
-                    style={{ display: 'flex', alignItems: 'center', gap: 6 }}
-                  >
-                    {type !== 'all' && <span style={{ fontSize: 13 }}>{TYPE_ICONS[type]}</span>}
-                    <span>{type === 'all' ? 'All' : `${TYPE_LABELS[type]}s`}</span>
-                    <span style={{
-                      background: 'var(--slate-5)', color: 'var(--slate-11)',
-                      borderRadius: 100, padding: '1px 7px', fontSize: '0.7rem', fontWeight: 700,
-                    }}>
-                      {counts[type]}
-                    </span>
+              <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 12 }}>
+                <ToggleGroup.Root
+                  type="single"
+                  value={activitiesView}
+                  onValueChange={(v) => { if (v) setActivitiesView(v as 'list' | 'calendar'); }}
+                  className="toggle-group"
+                >
+                  <ToggleGroup.Item value="list" className="toggle-item" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <List size={14} />
+                    <span>List</span>
                   </ToggleGroup.Item>
-                ))}
-              </ToggleGroup.Root>
+                  <ToggleGroup.Item value="calendar" className="toggle-item" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <Calendar size={14} />
+                    <span>Calendar</span>
+                  </ToggleGroup.Item>
+                </ToggleGroup.Root>
+
+                <ToggleGroup.Root
+                  type="single"
+                  value={filter}
+                  onValueChange={(v) => { if (v) { setFilter(v as FilterType); setCurrentPage(1); } }}
+                  className="toggle-group"
+                >
+                  {(['all', 'exercise', 'event', 'incident'] as FilterType[]).map(type => (
+                    <ToggleGroup.Item
+                      key={type}
+                      value={type}
+                      className="toggle-item"
+                      style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+                    >
+                      {type !== 'all' && <span style={{ fontSize: 13 }}>{TYPE_ICONS[type]}</span>}
+                      <span>{type === 'all' ? 'All' : `${TYPE_LABELS[type]}s`}</span>
+                      <span style={{
+                        background: 'var(--slate-5)', color: 'var(--slate-11)',
+                        borderRadius: 100, padding: '1px 7px', fontSize: '0.7rem', fontWeight: 700,
+                      }}>
+                        {counts[type]}
+                      </span>
+                    </ToggleGroup.Item>
+                  ))}
+                </ToggleGroup.Root>
+              </div>
             ) : (
               <button
                 className="btn btn-primary"
@@ -296,20 +326,69 @@ export function Dashboard() {
             )}
           </div>
 
+          {/* Month Navigation Control Bar for Activities */}
+          {viewMode === 'activities' && activitiesView === 'calendar' && (
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 12,
+              marginBottom: 20,
+              padding: '10px 16px',
+              background: 'white',
+              border: '1px solid var(--slate-3)',
+              borderRadius: 10,
+              boxShadow: '0 1px 3px rgba(6,27,68,0.04)',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <button
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => { setCurrentMonth(prev => subMonths(prev, 1)); setCurrentPage(1); }}
+                  title="Previous Month"
+                  style={{ padding: '5px 8px' }}
+                >
+                  <ChevronLeft size={16} />
+                </button>
+                <h3 style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--slate-12)', minWidth: 140, textAlign: 'center' }}>
+                  {format(currentMonth, 'MMMM yyyy')}
+                </h3>
+                <button
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => { setCurrentMonth(prev => addMonths(prev, 1)); setCurrentPage(1); }}
+                  title="Next Month"
+                  style={{ padding: '5px 8px' }}
+                >
+                  <ChevronRight size={16} />
+                </button>
+                <button
+                  className="btn btn-ghost btn-sm"
+                  onClick={() => { setCurrentMonth(new Date()); setCurrentPage(1); }}
+                  style={{ fontSize: '0.8125rem', fontWeight: 600, color: 'var(--navy-7)' }}
+                >
+                  Today
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Content */}
           {viewMode === 'activities' ? (
             isLoading ? (
-              <div style={{ display: 'grid', gap: 12 }}>
-                {[...Array(6)].map((_, i) => (
-                  <div key={i} className="card" style={{ height: 88, padding: 20, display: 'flex', alignItems: 'center', gap: 16 }}>
-                    <div className="skeleton" style={{ width: 58, height: 58, borderRadius: 10, flexShrink: 0 }} />
-                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 8 }}>
-                      <div className="skeleton" style={{ height: 16, width: '45%' }} />
-                      <div className="skeleton" style={{ height: 12, width: '65%' }} />
+              activitiesView === 'calendar' ? (
+                <CalendarSkeleton />
+              ) : (
+                <div style={{ display: 'grid', gap: 12 }}>
+                  {[...Array(6)].map((_, i) => (
+                    <div key={i} className="card" style={{ height: 88, padding: 20, display: 'flex', alignItems: 'center', gap: 16 }}>
+                      <div className="skeleton" style={{ width: 58, height: 58, borderRadius: 10, flexShrink: 0 }} />
+                      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                        <div className="skeleton" style={{ height: 16, width: '45%' }} />
+                        <div className="skeleton" style={{ height: 12, width: '65%' }} />
+                      </div>
                     </div>
-                  </div>
-                ))}
-              </div>
+                  ))}
+                </div>
+              )
             ) : error ? (
               <div className="card" style={{ padding: 40, textAlign: 'center' }}>
                 <div style={{ fontSize: '2rem', marginBottom: 12 }}>⚠️</div>
@@ -327,12 +406,18 @@ export function Dashboard() {
                   <Layers size={28} style={{ color: 'var(--slate-8)' }} />
                 </div>
                 <h3 style={{ fontSize: '1.0625rem', fontWeight: 700, color: 'var(--slate-12)', marginBottom: 6 }}>
-                  No upcoming {filter === 'all' ? 'activities' : `${TYPE_LABELS[filter]}s`.toLowerCase()}
+                  No {filter === 'all' ? 'activities' : `${TYPE_LABELS[filter]}s`.toLowerCase()} in {format(currentMonth, 'MMMM yyyy')}
                 </h3>
                 <p style={{ fontSize: '0.875rem', color: 'var(--slate-10)' }}>
-                  Nothing scheduled yet. Check back later or switch filters.
+                  Nothing scheduled for this month. Check back later or navigate to another month.
                 </p>
               </div>
+            ) : activitiesView === 'calendar' ? (
+              <CalendarView
+                activities={filtered}
+                currentMonth={currentMonth}
+                onSelectActivity={(activity) => navigate(`/exercise/${activity.id}`, { state: { exercise: activity } })}
+              />
             ) : (
               <>
                 <div style={{ display: 'grid', gap: 10 }}>
@@ -437,7 +522,7 @@ export function Dashboard() {
                       <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: '0.8125rem', color: 'var(--slate-10)' }}>
                           <Calendar size={13} />
-                          <span>{format(new Date(roster.createdAt), 'h:mm a')}</span>
+                          <span>{format(new Date(roster.createdAt), 'HHmm')}</span>
                         </div>
                       </div>
                     </div>
@@ -460,6 +545,214 @@ export function Dashboard() {
       </div>
       <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </Tooltip.Provider>
+  );
+}
+
+function CalendarSkeleton() {
+  return (
+    <div className="card" style={{ overflow: 'hidden', border: '1px solid var(--slate-3)' }}>
+      {/* Weekday headers */}
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(7, minmax(0, 1fr))',
+        background: 'var(--slate-2)',
+        borderBottom: '1px solid var(--slate-3)',
+      }}>
+        {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(dayName => (
+          <div
+            key={dayName}
+            style={{
+              padding: '10px 8px',
+              textAlign: 'center',
+              fontSize: '0.75rem',
+              fontWeight: 700,
+              color: 'var(--slate-10)',
+              textTransform: 'uppercase',
+              letterSpacing: '0.05em',
+              minWidth: 0,
+            }}
+          >
+            {dayName}
+          </div>
+        ))}
+      </div>
+
+      {/* Grid of skeleton days */}
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(7, minmax(0, 1fr))',
+        gap: 1,
+        background: 'var(--slate-3)',
+      }}>
+        {[...Array(35)].map((_, i) => (
+          <div
+            key={i}
+            style={{
+              minHeight: 110,
+              minWidth: 0,
+              overflow: 'hidden',
+              background: 'white',
+              padding: '8px',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 6,
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div className="skeleton" style={{ width: 22, height: 22, borderRadius: '50%' }} />
+            </div>
+            {i % 3 === 0 && (
+              <div className="skeleton" style={{ height: 20, width: '85%', borderRadius: 6 }} />
+            )}
+            {i % 5 === 0 && (
+              <div className="skeleton" style={{ height: 20, width: '65%', borderRadius: 6 }} />
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function CalendarView({
+  activities,
+  currentMonth,
+  onSelectActivity,
+}: {
+  activities: Activity[];
+  currentMonth: Date;
+  onSelectActivity: (activity: Activity) => void;
+}) {
+  const monthStart = startOfMonth(currentMonth);
+  const monthEnd = endOfMonth(currentMonth);
+  const startDate = startOfWeek(monthStart);
+  const endDate = endOfWeek(monthEnd);
+  const days = eachDayOfInterval({ start: startDate, end: endDate });
+
+  return (
+    <div className="card" style={{ overflow: 'hidden', border: '1px solid var(--slate-3)' }}>
+      {/* Weekday headers */}
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(7, minmax(0, 1fr))',
+        background: 'var(--slate-2)',
+        borderBottom: '1px solid var(--slate-3)',
+      }}>
+        {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(dayName => (
+          <div
+            key={dayName}
+            style={{
+              padding: '10px 8px',
+              textAlign: 'center',
+              fontSize: '0.75rem',
+              fontWeight: 700,
+              color: 'var(--slate-10)',
+              textTransform: 'uppercase',
+              letterSpacing: '0.05em',
+              minWidth: 0,
+            }}
+          >
+            {dayName}
+          </div>
+        ))}
+      </div>
+
+      {/* Grid of days */}
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(7, minmax(0, 1fr))',
+        gap: 1,
+        background: 'var(--slate-3)',
+      }}>
+        {days.map(day => {
+          const inMonth = isSameMonth(day, currentMonth);
+          const today = isToday(day);
+          const dayActivities = activities.filter(a => isSameDay(new Date(a.startsAt), day));
+
+          return (
+            <div
+              key={day.toISOString()}
+              style={{
+                minHeight: 110,
+                minWidth: 0,
+                overflow: 'hidden',
+                background: today ? '#F0F7FF' : inMonth ? 'white' : 'var(--slate-1)',
+                padding: '8px',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 6,
+                opacity: inMonth ? 1 : 0.55,
+                transition: 'background 0.15s ease',
+              }}
+            >
+              {/* Day Number Header */}
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span
+                  style={{
+                    fontSize: '0.8125rem',
+                    fontWeight: today ? 800 : inMonth ? 600 : 400,
+                    color: today ? 'white' : inMonth ? 'var(--slate-12)' : 'var(--slate-8)',
+                    background: today ? 'var(--navy-9)' : 'transparent',
+                    width: 24,
+                    height: 24,
+                    borderRadius: '50%',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                >
+                  {format(day, 'd')}
+                </span>
+                {dayActivities.length > 0 && (
+                  <span style={{
+                    fontSize: '0.6875rem',
+                    color: 'var(--slate-9)',
+                    fontWeight: 700,
+                    background: 'var(--slate-3)',
+                    padding: '1px 6px',
+                    borderRadius: 10,
+                  }}>
+                    {dayActivities.length}
+                  </span>
+                )}
+              </div>
+
+              {/* Event Pills */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4, flex: 1, overflowY: 'auto', maxHeight: 110 }}>
+                {dayActivities.map(activity => {
+                  const title = activity.referenceDescription || activity.description || `Unnamed ${activity.type}`;
+                  const location = formatActivityLocation(activity);
+
+                  return (
+                    <div
+                      key={`${activity.type}-${activity.id}`}
+                      onClick={() => onSelectActivity(activity)}
+                      title={`${TYPE_LABELS[activity.type]}: ${title}${location ? ' @ ' + location : ''}`}
+                      className={`calendar-event-pill calendar-event-pill-${activity.type}`}
+                      style={{
+                        padding: '4px 6px',
+                        borderRadius: 6,
+                        fontSize: '0.75rem',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 5,
+                        lineHeight: 1.25,
+                      }}
+                    >
+                      <div className={`type-dot type-dot-${activity.type}`} style={{ width: 6, height: 6, flexShrink: 0 }} />
+                      <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontWeight: 500 }}>
+                        {title}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 
@@ -528,7 +821,7 @@ function ActivityCard({ activity, idx, onClick }: { activity: Activity; idx: num
         <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: '0.8125rem', color: 'var(--slate-10)' }}>
             <Calendar size={13} />
-            <span>{format(startDate, 'h:mm a')} – {format(endDate, 'h:mm a')}</span>
+            <span>{format(startDate, 'HHmm')} – {format(endDate, 'HHmm')}</span>
           </div>
           {location && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: '0.8125rem', color: 'var(--slate-10)', overflow: 'hidden' }}>

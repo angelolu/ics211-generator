@@ -127,16 +127,24 @@ export const verifyTokenAndGetContext = async (): Promise<{ contextId: number; t
   return { contextId: member.owner.id, title: member.owner.title };
 };
 
-export const getActivities = async (contextId: number): Promise<Activity[]> => {
-  const oneWeekAgo = new Date();
-  oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
-  const starts_after = oneWeekAgo.toISOString();
+export const getActivities = async (
+  contextId: number,
+  options?: { startsAfter?: string; startsBefore?: string }
+): Promise<Activity[]> => {
+  let starts_after: string;
+  if (options?.startsAfter) {
+    starts_after = options.startsAfter;
+  } else {
+    const oneWeekAgo = new Date();
+    oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
+    starts_after = oneWeekAgo.toISOString();
+  }
 
-  const params = {
+  const params: Record<string, any> = {
     starts_after,
     sort: 'startsAt',
     order: 'asc',
-    size: 100,
+    size: 250,
   };
 
   const [exercisesRes, eventsRes, incidentsRes] = await Promise.all([
@@ -225,11 +233,18 @@ export const getActivities = async (contextId: number): Promise<Activity[]> => {
     console.error('Error finding edited activities', e);
   }
 
-  const finalActivities = [...allActivities, ...editedActivities];
+  let finalActivities = [...allActivities, ...editedActivities];
+
+  if (options?.startsAfter || options?.startsBefore) {
+    const afterMs = options.startsAfter ? new Date(options.startsAfter).getTime() : 0;
+    const beforeMs = options.startsBefore ? new Date(options.startsBefore).getTime() : Infinity;
+    finalActivities = finalActivities.filter((a) => {
+      const t = new Date(a.startsAt).getTime();
+      return t >= afterMs && t <= beforeMs;
+    });
+  }
   
-  // Sort all activities by start date (descending, newest first, then reverse or sort ascending depending on preference)
-  // Dashboard shows closest first. Let's stick to ascending for future, but what about past?
-  // Let's sort ascending by start time.
+  // Sort all activities by start date ascending
   finalActivities.sort((a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime());
 
   // Deduplicate
