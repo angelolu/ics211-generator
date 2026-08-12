@@ -20,7 +20,7 @@ export const ICS211BForm = forwardRef<HTMLDivElement, ICS211FormProps>(
   ({ formState, highlightChanges, activityType = 'incident', showCalcHours = false, showQualifications = false, qualificationsMap = {}, onUpdateHeader, onUpdateRow, onRemoveRow, onRestoreRow }, ref) => {
     const typeLabel = activityType === 'exercise' ? 'EXERCISE' : activityType === 'event' ? 'EVENT' : 'INCIDENT';
 
-    const [contextMenu, setContextMenu] = useState<{ x: number, y: number, actions: { label: string, onClick: () => void, danger?: boolean }[] } | null>(null);
+    const [contextMenu, setContextMenu] = useState<{ x: number, y: number, actions: { label: string, onClick?: () => void, danger?: boolean, isInfo?: boolean, isError?: boolean, isSuccess?: boolean }[] } | null>(null);
 
     useEffect(() => {
       const closeMenu = () => setContextMenu(null);
@@ -32,7 +32,7 @@ export const ICS211BForm = forwardRef<HTMLDivElement, ICS211FormProps>(
       };
     }, []);
 
-    const handleCellContextMenu = (e: React.MouseEvent, actions: { label: string, onClick: () => void, danger?: boolean }[]) => {
+    const handleCellContextMenu = (e: React.MouseEvent, actions: { label: string, onClick?: () => void, danger?: boolean, isInfo?: boolean, isError?: boolean, isSuccess?: boolean }[]) => {
       setContextMenu({
         x: e.clientX,
         y: e.clientY,
@@ -54,19 +54,28 @@ export const ICS211BForm = forwardRef<HTMLDivElement, ICS211FormProps>(
               e.stopPropagation();
             }}
           >
-            {contextMenu.actions.map((action, i) => (
-              <div
-                key={i}
-                className={`px-3 py-2 cursor-pointer transition-colors flex items-center whitespace-pre-wrap break-words ${action.danger ? 'text-red-400 hover:bg-red-900/30' : 'hover:bg-slate-700'}`}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  action.onClick();
-                  setContextMenu(null);
-                }}
-              >
-                {action.label}
-              </div>
-            ))}
+            {contextMenu.actions.map((action, i) => {
+              if (action.isError || action.isSuccess || action.isInfo) {
+                return (
+                  <div key={i} className={`px-3 py-2 text-[11px] font-medium border-b border-slate-700 pb-2 mb-1 pointer-events-none whitespace-pre-wrap break-words ${action.isError ? 'text-red-400' : action.isSuccess ? 'text-emerald-400' : 'text-slate-300'}`}>
+                    {action.label}
+                  </div>
+                );
+              }
+              return (
+                <div
+                  key={i}
+                  className={`px-3 py-2 cursor-pointer transition-colors flex items-center whitespace-pre-wrap break-words ${action.danger ? 'text-red-400 hover:bg-red-900/30' : 'hover:bg-slate-700'}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    action.onClick && action.onClick();
+                    setContextMenu(null);
+                  }}
+                >
+                  {action.label}
+                </div>
+              );
+            })}
           </div>
         )}
 

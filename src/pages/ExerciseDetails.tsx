@@ -30,6 +30,7 @@ import { ICS211AForm } from '../components/ICS211AForm';
 import { ICS211BForm } from '../components/ICS211BForm';
 import { ICS211Form } from '../components/ICS211Form';
 import { useFormState } from '../hooks/useFormState';
+import { calculateHours } from '../utils/time';
 
 const FORM_TYPES = [
   { value: '211a', label: 'ICS 211A', icon: '📋' },
@@ -131,7 +132,7 @@ export function ExerciseDetails() {
         if (key === 'hours' && showCalcHours) {
           return escapeCsv(calculateHours(row.cells.timeIn?.value || '', row.cells.timeOut?.value || ''));
         }
-        return escapeCsv(row.cells[key]?.value || '');
+        return escapeCsv((row.cells as Record<string, any>)[key]?.value || '');
       }).join(',')) || [];
 
     const csvContent = [headers.join(','), ...rows].join('\n');
