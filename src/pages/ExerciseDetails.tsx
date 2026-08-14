@@ -24,7 +24,7 @@ import {
   UserCheck,
 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
-import { useLocation, useNavigate, useParams } from 'react-router-dom';
+import { Navigate, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { useReactToPrint } from 'react-to-print';
 import type { Activity } from '../api/d4h';
 import { ICS211AForm } from '../components/ICS211AForm';
@@ -153,8 +153,7 @@ export function ExerciseDetails() {
   };
 
   if (!id || (!isLocal && !contextId) || !exercise) {
-    navigate('/dashboard');
-    return null;
+    return <Navigate to="/" replace />;
   }
 
   return (
@@ -579,7 +578,7 @@ export function ExerciseDetails() {
           )}
 
           {/* ── Form ─────────────────────────────────────── */}
-          {isLoading || !formState ? (
+          {isLoading ? (
             <div className="no-print" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: 300, gap: 16 }}>
               <Loader2 size={36} style={{ color: 'var(--indigo-9)', animation: 'spin 1s linear infinite' }} />
               <p style={{ fontSize: '0.9375rem', color: 'var(--slate-10)', fontWeight: 500 }}>
