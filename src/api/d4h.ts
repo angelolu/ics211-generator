@@ -1,6 +1,19 @@
 import axios from 'axios';
 
 const BASE_URL = 'https://api.team-manager.us.d4h.com/v3';
+const CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes for members and qualifications
+const ACTIVITIES_CACHE_TTL_MS = 15 * 60 * 1000; // 15 minutes for activity lists
+
+// In-flight promise cache to deduplicate simultaneous requests
+const inFlightRequests = new Map<string, Promise<any>>();
+
+function dedupe<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  const existing = inFlightRequests.get(key);
+  if (existing) return existing;
+  const promise = fn().finally(() => inFlightRequests.delete(key));
+  inFlightRequests.set(key, promise);
+  return promise;
+}
 
 // Setup axios instance
 const api = axios.create({
@@ -17,7 +30,7 @@ api.interceptors.request.use((config) => {
 
 api.interceptors.response.use(
   (response) => response,
-  (error) => {
+  async (error) => {
     if (error.response && error.response.status === 401) {
       localStorage.removeItem('d4h_token');
       localStorage.removeItem('d4h_context_id');
@@ -28,7 +41,20 @@ api.interceptors.response.use(
         const loginUrl = (baseUrl.endsWith('/') ? baseUrl : baseUrl + '/') + 'login';
         window.location.href = loginUrl;
       }
+      return Promise.reject(error);
     }
+
+    // Handle 429 Rate Limiting with retry
+    if (error.response && error.response.status === 429 && !error.config._retry) {
+      error.config._retry = true;
+      const retryAfterHeader = error.response.headers['retry-after'];
+      const delaySec = retryAfterHeader ? parseInt(retryAfterHeader, 10) : 10;
+      const delayMs = (!isNaN(delaySec) && delaySec > 0 ? delaySec : 10) * 1000;
+      console.warn(`[D4H API] Rate limited (429). Retrying in ${delayMs / 1000}s...`);
+      await new Promise(resolve => setTimeout(resolve, delayMs));
+      return api.request(error.config);
+    }
+
     return Promise.reject(error);
   }
 );
@@ -104,6 +130,11 @@ export interface Attendee {
     resourceType: string;
     name?: string;
   };
+  role?: {
+    id?: number;
+    title?: string;
+    resourceType?: string;
+  };
   startsAt?: string;
   endsAt?: string;
   duration?: number;
@@ -114,26 +145,62 @@ export interface Attendee {
 export interface Member {
   id: number;
   name: string;
+  ref?: string;
+  idTag?: string;
+  status?: string;
+  customStatus?: { id?: number; title?: string; resourceType?: string };
+  role?: { id?: number; title?: string; resourceType?: string };
   position?: string;
-  mobile?: { phone: string };
-  home?: { phone: string };
-  work?: { phone: string };
-  pager?: { phone: string };
+  email?: string | { value?: string; verified?: boolean; email?: string };
+  mobile?: { phone?: string };
+  home?: { phone?: string };
+  work?: { phone?: string };
+  pager?: { phone?: string };
 }
 
 export const verifyTokenAndGetContext = async (): Promise<{ contextId: number; title: string }> => {
   const res = await api.get<WhoAmIResponse>('/whoami');
-  // Find the team context
   const member = res.data.members.find((m) => m.owner.resourceType === 'Team');
   if (!member) {
     throw new Error("No Team context found for this token.");
   }
+
+  // Pre-cache fallback subdomain based on title so we avoid unnecessary network calls
+  const fallbackSubdomain = member.owner.title.toLowerCase().trim().replace(/[^a-z0-9]/g, '');
+  localStorage.setItem('d4h_team_subdomain', fallbackSubdomain);
+
   return { contextId: member.owner.id, title: member.owner.title };
 };
 
+export async function fetchAndCacheTeamSubdomain(_contextId?: string | number): Promise<string | null> {
+  const cached = localStorage.getItem('d4h_team_subdomain');
+  if (cached) return cached;
+
+  const teamTitle = localStorage.getItem('d4h_team_title');
+  const fallback = teamTitle ? teamTitle.toLowerCase().trim().replace(/[^a-z0-9]/g, '') : 'calsar';
+  localStorage.setItem('d4h_team_subdomain', fallback);
+  return fallback;
+}
+
+export function getD4HActivityUrl(activityId: number | string, activityType?: string): string {
+  const typePlural = activityType === 'event' ? 'events' : activityType === 'incident' ? 'incidents' : 'exercises';
+  let subdomain = localStorage.getItem('d4h_team_subdomain');
+  if (!subdomain) {
+    const teamTitle = localStorage.getItem('d4h_team_title');
+    if (teamTitle) {
+      subdomain = teamTitle.toLowerCase().trim().replace(/[^a-z0-9]/g, '');
+    }
+  }
+  const host = subdomain ? `${subdomain}.team-manager.us.d4h.com` : 'team-manager.us.d4h.com';
+  return `https://${host}/team/${typePlural}/view/${activityId}`;
+}
+
+// In-memory cache for activity lists (cleared on browser reload)
+const activityListCache = new Map<string, { results: Activity[]; cachedAt: number }>();
+
 export const getActivities = async (
   contextId: number,
-  options?: { startsAfter?: string; startsBefore?: string }
+  options?: { startsAfter?: string; startsBefore?: string; forceRefresh?: boolean }
 ): Promise<Activity[]> => {
   let starts_after: string;
   if (options?.startsAfter) {
@@ -144,164 +211,198 @@ export const getActivities = async (
     starts_after = oneWeekAgo.toISOString();
   }
 
-  const params: Record<string, any> = {
-    starts_after,
-    sort: 'startsAt',
-    order: 'asc',
-    size: 250,
-  };
+  const cacheKey = `${contextId}_${starts_after}_${options?.startsBefore || ''}`;
 
-  const [exercisesRes, eventsRes, incidentsRes] = await Promise.all([
-    api.get<{ results: Activity[] }>(`/team/${contextId}/exercises`, { params }).catch(() => ({ data: { results: [] } })),
-    api.get<{ results: Activity[] }>(`/team/${contextId}/events`, { params }).catch(() => ({ data: { results: [] } })),
-    api.get<{ results: Activity[] }>(`/team/${contextId}/incidents`, { params }).catch(() => ({ data: { results: [] } })),
-  ]);
-
-  const exercises = exercisesRes.data.results.map(r => ({ ...r, type: 'exercise' as const }));
-  const events = eventsRes.data.results.map(r => ({ ...r, type: 'event' as const }));
-  const incidents = incidentsRes.data.results.map(r => ({ ...r, type: 'incident' as const }));
-
-  const allActivities = [...exercises, ...events, ...incidents];
-  
-  // Cache fetched activities so we don't have to refetch them if they are edited in the future
+  // Clean up any stale localStorage activity list caches from previous sessions
   try {
-    const cache = JSON.parse(localStorage.getItem('d4h_activity_cache') || '{}');
-    allActivities.forEach(a => { cache[a.id] = a; });
-    localStorage.setItem('d4h_activity_cache', JSON.stringify(cache));
-  } catch (e) {
-    console.error('Failed to update activity cache', e);
+    for (let i = localStorage.length - 1; i >= 0; i--) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith('d4h_activities_cache_')) {
+        localStorage.removeItem(k);
+      }
+    }
+  } catch { }
+
+  // Check in-memory cache unless forceRefresh is requested
+  if (!options?.forceRefresh) {
+    const cached = activityListCache.get(cacheKey);
+    if (cached && Date.now() - cached.cachedAt < ACTIVITIES_CACHE_TTL_MS) {
+      let list = cached.results;
+      if (options?.startsBefore) {
+        const beforeMs = new Date(options.startsBefore).getTime();
+        list = list.filter(a => new Date(a.startsAt).getTime() <= beforeMs);
+      }
+      return list;
+    }
   }
 
-  // Find activities from any time period that have local edits
-  const editedActivities: Activity[] = [];
-  try {
-    const cache = JSON.parse(localStorage.getItem('d4h_activity_cache') || '{}');
-    const missingIdsToFetch: number[] = [];
-    
-    for (let i = 0; i < localStorage.length; i++) {
-      const key = localStorage.key(i);
-      if (key && key.startsWith('d4h_form_') && !key.startsWith('d4h_form_local_') && !key.startsWith('d4h_form_type_')) {
-        const idStr = key.replace('d4h_form_', '');
-        const id = parseInt(idStr, 10);
-        if (isNaN(id)) continue;
-        
-        // Already in fetched list?
-        if (allActivities.some(a => a.id === id)) continue;
+  const dedupeKey = `getActivities_${cacheKey}`;
+  return dedupe(dedupeKey, async () => {
+    const params: Record<string, any> = {
+      starts_after,
+      sort: 'startsAt',
+      order: 'asc',
+      size: 250,
+    };
 
-        const savedData = localStorage.getItem(key);
-        if (savedData) {
-          const formState = JSON.parse(savedData);
-          type CellLocallyEdited = { isEditedLocally?: boolean };
-          type RowLocallyEdited = { cells?: Record<string, CellLocallyEdited>; isDeleted?: boolean };
-          const hasLocalChanges = 
-            (formState.headers && Object.values(formState.headers as Record<string, CellLocallyEdited>).some(c => c.isEditedLocally)) ||
-            (formState.rows && (formState.rows as RowLocallyEdited[]).some(r => (r.cells && Object.values(r.cells).some(c => c.isEditedLocally)) || r.isDeleted));
-            
-          if (hasLocalChanges) {
-            if (cache[id]) {
-              editedActivities.push(cache[id]);
-            } else {
-              missingIdsToFetch.push(id);
-            }
+    const [exercisesRes, eventsRes, incidentsRes] = await Promise.all([
+      api.get<{ results: Activity[] }>(`/team/${contextId}/exercises`, { params }).catch((e) => { console.warn('Failed to fetch exercises:', e); return { data: { results: [] } }; }),
+      api.get<{ results: Activity[] }>(`/team/${contextId}/events`, { params }).catch((e) => { console.warn('Failed to fetch events:', e); return { data: { results: [] } }; }),
+      api.get<{ results: Activity[] }>(`/team/${contextId}/incidents`, { params }).catch((e) => { console.warn('Failed to fetch incidents:', e); return { data: { results: [] } }; }),
+    ]);
+
+    const exercises = (exercisesRes.data.results || []).map(r => ({ ...r, type: 'exercise' as const }));
+    const events = (eventsRes.data.results || []).map(r => ({ ...r, type: 'event' as const }));
+    const incidents = (incidentsRes.data.results || []).map(r => ({ ...r, type: 'incident' as const }));
+
+    const allActivities = [...exercises, ...events, ...incidents];
+
+    // Cache to global activity item cache
+    try {
+      const itemCache = JSON.parse(localStorage.getItem('d4h_activity_cache') || '{}');
+      allActivities.forEach(a => { itemCache[a.id] = a; });
+      localStorage.setItem('d4h_activity_cache', JSON.stringify(itemCache));
+    } catch { }
+
+    // Find activities with local changes
+    const editedActivities: Activity[] = [];
+    try {
+      const itemCache = JSON.parse(localStorage.getItem('d4h_activity_cache') || '{}');
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith('d4h_form_') && !key.startsWith('d4h_form_local_') && !key.startsWith('d4h_form_type_')) {
+          const idStr = key.replace('d4h_form_', '');
+          const id = parseInt(idStr, 10);
+          if (!isNaN(id) && !allActivities.some(a => a.id === id) && itemCache[id]) {
+            editedActivities.push(itemCache[id]);
           }
         }
       }
+    } catch { }
+
+    let finalActivities = [...allActivities, ...editedActivities];
+    finalActivities.sort((a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime());
+    const uniqueActivities = Array.from(new Map(finalActivities.map(a => [a.id, a])).values());
+
+    // Store in in-memory cache for SPA view switching
+    activityListCache.set(cacheKey, { results: uniqueActivities, cachedAt: Date.now() });
+
+    if (options?.startsBefore) {
+      const beforeMs = new Date(options.startsBefore).getTime();
+      return uniqueActivities.filter(a => new Date(a.startsAt).getTime() <= beforeMs);
     }
-    
-    // Fetch missing ones individually
-    if (missingIdsToFetch.length > 0) {
-      const fetchPromises = missingIdsToFetch.map(async (id) => {
-        // We don't know the type, so try exercise first, then event, then incident
-        let res = await api.get<Activity>(`/team/${contextId}/exercises/${id}`).catch(() => null);
-        if (res?.data && res.data.id) return { ...res.data, type: 'exercise' as const };
-        
-        res = await api.get<Activity>(`/team/${contextId}/events/${id}`).catch(() => null);
-        if (res?.data && res.data.id) return { ...res.data, type: 'event' as const };
-        
-        res = await api.get<Activity>(`/team/${contextId}/incidents/${id}`).catch(() => null);
-        if (res?.data && res.data.id) return { ...res.data, type: 'incident' as const };
-        
-        return null;
-      });
-      
-      const missingFetched = await Promise.all(fetchPromises);
-      missingFetched.forEach(act => {
-        if (act) {
-          editedActivities.push(act as Activity);
-          cache[act.id] = act;
-        }
-      });
-      localStorage.setItem('d4h_activity_cache', JSON.stringify(cache));
-    }
-  } catch (e) {
-    console.error('Error finding edited activities', e);
-  }
 
-  let finalActivities = [...allActivities, ...editedActivities];
-
-  if (options?.startsAfter || options?.startsBefore) {
-    const afterMs = options.startsAfter ? new Date(options.startsAfter).getTime() : 0;
-    const beforeMs = options.startsBefore ? new Date(options.startsBefore).getTime() : Infinity;
-    finalActivities = finalActivities.filter((a) => {
-      const t = new Date(a.startsAt).getTime();
-      return t >= afterMs && t <= beforeMs;
-    });
-  }
-  
-  // Sort all activities by start date ascending
-  finalActivities.sort((a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime());
-
-  // Deduplicate
-  const uniqueActivities = Array.from(new Map(finalActivities.map(a => [a.id, a])).values());
-
-  return uniqueActivities;
+    return uniqueActivities;
+  });
 };
 
 export const getActivity = async (contextId: number, id: number, type?: string): Promise<Activity | null> => {
-  if (type === 'exercise' || type === 'event' || type === 'incident') {
-    const res = await api.get<Activity>(`/team/${contextId}/${type}s/${id}`).catch(() => null);
-    if (res?.data && res.data.id) return { ...res.data, type: type as any };
-  }
+  // Check localStorage cache first
+  try {
+    const itemCache = JSON.parse(localStorage.getItem('d4h_activity_cache') || '{}');
+    if (itemCache[id]) return itemCache[id];
+  } catch { }
 
-  let res = await api.get<Activity>(`/team/${contextId}/exercises/${id}`).catch(() => null);
-  if (res?.data && res.data.id) return { ...res.data, type: 'exercise' as const };
-  
-  res = await api.get<Activity>(`/team/${contextId}/events/${id}`).catch(() => null);
-  if (res?.data && res.data.id) return { ...res.data, type: 'event' as const };
-  
-  res = await api.get<Activity>(`/team/${contextId}/incidents/${id}`).catch(() => null);
-  if (res?.data && res.data.id) return { ...res.data, type: 'incident' as const };
+  const dedupeKey = `getActivity_${contextId}_${id}_${type || 'unknown'}`;
+  return dedupe(dedupeKey, async () => {
+    if (type === 'exercise' || type === 'event' || type === 'incident') {
+      const res = await api.get<Activity>(`/team/${contextId}/${type}s/${id}`).catch(() => null);
+      if (res?.data && res.data.id) {
+        const act = { ...res.data, type: type as any };
+        try {
+          const itemCache = JSON.parse(localStorage.getItem('d4h_activity_cache') || '{}');
+          itemCache[id] = act;
+          localStorage.setItem('d4h_activity_cache', JSON.stringify(itemCache));
+        } catch { }
+        return act;
+      }
+    }
 
-  return null;
+    let res = await api.get<Activity>(`/team/${contextId}/exercises/${id}`).catch(() => null);
+    if (res?.data && res.data.id) return { ...res.data, type: 'exercise' as const };
+
+    res = await api.get<Activity>(`/team/${contextId}/events/${id}`).catch(() => null);
+    if (res?.data && res.data.id) return { ...res.data, type: 'event' as const };
+
+    res = await api.get<Activity>(`/team/${contextId}/incidents/${id}`).catch(() => null);
+    if (res?.data && res.data.id) return { ...res.data, type: 'incident' as const };
+
+    return null;
+  });
 };
 
 export const getAttendees = async (contextId: number, exerciseId: number): Promise<Attendee[]> => {
-  // Fetch attendance for this specific exercise
-  const res = await api.get<{ results: Attendee[] }>(`/team/${contextId}/attendance`, {
-    params: {
-      activity_id: exerciseId,
-      size: 200,
-    },
+  const dedupeKey = `getAttendees_${contextId}_${exerciseId}`;
+  return dedupe(dedupeKey, async () => {
+    const res = await api.get<{ results: Attendee[] }>(`/team/${contextId}/attendance`, {
+      params: {
+        activity_id: exerciseId,
+        size: 200,
+      },
+    });
+
+    return res.data.results.filter(a =>
+      a.status === 'ATTENDING' ||
+      a.status === 'attending' ||
+      a.status === 'CONFIRMED' ||
+      a.status === 'confirmed'
+    );
   });
-  
-  // Filter for ATTENDING only (Confirmed)
-  return res.data.results.filter(a => 
-    a.status === 'ATTENDING' || 
-    a.status === 'attending' || 
-    a.status === 'CONFIRMED' || 
-    a.status === 'confirmed'
-  );
 };
 
 export const getMemberDetails = async (contextId: number, memberIds: number[]): Promise<Member[]> => {
   if (memberIds.length === 0) return [];
-  const res = await api.get<{ results: Member[] }>(`/team/${contextId}/members`, {
-    params: {
-      id: memberIds,
-      size: memberIds.length,
-    },
+
+  const cacheKey = `d4h_members_cache_${contextId}`;
+  let memberCache: Record<number, { data: Member; cachedAt: number }> = {};
+  try {
+    memberCache = JSON.parse(localStorage.getItem(cacheKey) || '{}');
+  } catch { }
+
+  const now = Date.now();
+  const missingIds: number[] = [];
+  const results: Member[] = [];
+
+  memberIds.forEach(id => {
+    const cached = memberCache[id];
+    if (cached && now - cached.cachedAt < CACHE_TTL_MS && cached.data) {
+      results.push(cached.data);
+    } else {
+      missingIds.push(id);
+    }
   });
-  return res.data.results;
+
+  if (missingIds.length === 0) {
+    return results;
+  }
+
+  const dedupeKey = `getMemberDetails_${contextId}_${missingIds.sort().join(',')}`;
+  return dedupe(dedupeKey, async () => {
+    try {
+      const res = await api.get<{ results: Member[] }>(`/team/${contextId}/members`, {
+        params: {
+          id: missingIds,
+          size: missingIds.length,
+        },
+      });
+
+      const fetchedMembers = res.data.results || [];
+      fetchedMembers.forEach(m => {
+        if (m.id) {
+          memberCache[m.id] = { data: m, cachedAt: Date.now() };
+          results.push(m);
+        }
+      });
+
+      try {
+        localStorage.setItem(cacheKey, JSON.stringify(memberCache));
+      } catch { }
+    } catch (e) {
+      console.error('Error fetching member details:', e);
+    }
+
+    return results;
+  });
 };
 
 export interface MemberQualificationAward {
@@ -315,85 +416,107 @@ export interface MemberQualificationAward {
   resourceType: string;
 }
 
+export interface MemberQualificationsResult {
+  medicalMap: Record<number, string>;
+  technicalMap: Record<number, string>;
+}
+
 /**
- * Fetches qualification awards for the given members, returning a map of
- * memberId → comma-separated active qualification titles.
- * Fetches all awards for the team and filters client-side (D4H does not
- * support array-based member_id filtering on this endpoint).
+ * Fetches qualification awards for the given members with a 30-minute cache TTL.
  */
 export const getMemberQualifications = async (
   contextId: number,
   memberIds: number[]
-): Promise<Record<number, string>> => {
-  if (memberIds.length === 0) return {};
+): Promise<MemberQualificationsResult> => {
+  if (memberIds.length === 0) return { medicalMap: {}, technicalMap: {} };
 
-  const result: Record<number, string> = {};
-  const memberIdSet = new Set(memberIds);
-  const now = new Date().toISOString();
+  const cacheKey = `d4h_quals_cache_${contextId}`;
 
-  console.log('[Quals] Fetching qualification definitions & awards for contextId:', contextId);
-
+  // Check 30-minute storage cache
   try {
-    // 1. Fetch qualification definitions to map qualId -> title
-    const defsRes = await api.get<{ results: { id: number; title: string }[] }>(
-      `/team/${contextId}/member-qualifications`,
-      { params: { size: 250 } }
-    ).catch(() => ({ data: { results: [] } }));
-
-    const qualDefMap: Record<number, string> = {};
-    (defsRes.data.results ?? []).forEach((q) => {
-      if (q.id && q.title) {
-        qualDefMap[q.id] = q.title;
+    const saved = localStorage.getItem(cacheKey);
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (parsed.cachedAt && Date.now() - parsed.cachedAt < CACHE_TTL_MS && parsed.medicalMap && parsed.technicalMap) {
+        return {
+          medicalMap: parsed.medicalMap,
+          technicalMap: parsed.technicalMap,
+        };
       }
-    });
+    }
+  } catch { }
 
-    // 2. Paginate through all awards — fetch up to 250 per page
-    let page = 1;
-    const PAGE_SIZE = 250;
-    let totalFetched = 0;
+  const dedupeKey = `getMemberQualifications_${contextId}`;
+  return dedupe(dedupeKey, async () => {
+    const medicalMap: Record<number, string> = {};
+    const technicalMap: Record<number, string> = {};
+    const now = new Date().toISOString();
 
-    while (true) {
-      const res = await api.get<{ results: MemberQualificationAward[]; count?: number }>(
-        `/team/${contextId}/member-qualification-awards`,
-        { params: { size: PAGE_SIZE, page } }
-      );
+    try {
+      // 1. Fetch qualification definitions
+      const defsRes = await api.get<{ results: { id: number; title: string; deprecatedBundle?: string }[] }>(
+        `/team/${contextId}/member-qualifications`,
+        { params: { size: 250 } }
+      ).catch(() => ({ data: { results: [] } }));
 
-      const awards = res.data.results ?? [];
-      console.log(`[Quals] Page ${page}: received ${awards.length} awards`);
-      if (awards.length === 0) break;
-
-      awards.forEach((award) => {
-        const memberId = award.member?.id;
-        // Only care about members in our roster
-        if (!memberId || !memberIdSet.has(memberId)) return;
-        // Skip expired awards (D4H v3 uses endsAt or expiresAt)
-        const expiration = award.endsAt || award.expiresAt;
-        if (expiration && expiration < now) return;
-
-        const qualId = award.qualification?.id;
-        const title = (qualId && qualDefMap[qualId]) || award.qualification?.title;
-        if (!title) return;
-
-        // Prevent duplicate titles per member
-        const currentQuals = result[memberId] ? result[memberId].split(', ') : [];
-        if (!currentQuals.includes(title)) {
-          result[memberId] = result[memberId] ? `${result[memberId]}, ${title}` : title;
+      const qualDefMap: Record<number, { title: string; isMedical: boolean; isIgnored: boolean }> = {};
+      (defsRes.data.results ?? []).forEach((q) => {
+        if (q.id && q.title) {
+          const isMed = q.deprecatedBundle === 'Medical' || /^(CPR|MED|CISM|WFA|WFR|EMT|BLS|First Aid)/i.test(q.title);
+          const isIgnored = q.deprecatedBundle === 'Clerical' || /^(Candidate Fees|Member Dues|Code of Conduct|Youth Protection)/i.test(q.title);
+          qualDefMap[q.id] = { title: q.title, isMedical: isMed, isIgnored };
         }
       });
 
-      totalFetched += awards.length;
-      // If we got fewer than a full page, we're done
-      if (awards.length < PAGE_SIZE) break;
-      page++;
+      // 2. Paginate through all awards
+      let page = 1;
+      const PAGE_SIZE = 250;
+
+      while (true) {
+        const res = await api.get<{ results: MemberQualificationAward[]; count?: number }>(
+          `/team/${contextId}/member-qualification-awards`,
+          { params: { size: PAGE_SIZE, page } }
+        );
+
+        const awards = res.data.results ?? [];
+        if (awards.length === 0) break;
+
+        awards.forEach((award) => {
+          const memberId = award.member?.id;
+          if (!memberId) return;
+          const expiration = award.endsAt || award.expiresAt;
+          if (expiration && expiration < now) return;
+
+          const qualId = award.qualification?.id;
+          const def = qualId ? qualDefMap[qualId] : undefined;
+          const title = def?.title || award.qualification?.title;
+          if (!title || def?.isIgnored) return;
+
+          const isMed = def?.isMedical ?? (/^(CPR|MED|CISM|WFA|WFR|EMT|BLS|First Aid)/i.test(title));
+          const targetMap = isMed ? medicalMap : technicalMap;
+
+          const currentQuals = targetMap[memberId] ? targetMap[memberId].split(', ') : [];
+          if (!currentQuals.includes(title)) {
+            targetMap[memberId] = targetMap[memberId] ? `${targetMap[memberId]}, ${title}` : title;
+          }
+        });
+
+        if (awards.length < PAGE_SIZE) break;
+        page++;
+      }
+
+      // Save to 30-minute cache
+      try {
+        localStorage.setItem(cacheKey, JSON.stringify({
+          medicalMap,
+          technicalMap,
+          cachedAt: Date.now(),
+        }));
+      } catch { }
+    } catch (e: unknown) {
+      console.error('[Quals] API call failed:', e);
     }
 
-    console.log('[Quals] Total awards fetched:', totalFetched);
-    console.log('[Quals] Final qualificationsMap:', result);
-  } catch (e: unknown) {
-    const err = e as { response?: { status?: number; data?: unknown }; message?: string };
-    console.error('[Quals] API call FAILED');
-    console.error('[Quals] Error:', err?.response?.status, err?.response?.data ?? err?.message ?? err);
-  }
-
-  return result;
+    return { medicalMap, technicalMap };
+  });
 };

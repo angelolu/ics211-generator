@@ -8,36 +8,45 @@ import * as Tooltip from '@radix-ui/react-tooltip';
 import {
   AlertTriangle,
   ArrowLeft,
-  Award,
+  Briefcase,
   Check,
   ChevronDown,
   Clock,
+  ExternalLink,
   FileDown,
   FileText,
+  Hash,
+  HeartPulse,
   Highlighter,
   Loader2,
+  Mail,
+  Phone,
   Plus,
   Printer,
   RefreshCw,
   RotateCcw,
+  Shield,
   Trash2,
   UserCheck,
+  Wrench,
 } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Navigate, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { useReactToPrint } from 'react-to-print';
+import { getD4HActivityUrl } from '../api/d4h';
 import type { Activity } from '../api/d4h';
 import { ICS211AForm } from '../components/ICS211AForm';
 import { ICS211BForm } from '../components/ICS211BForm';
 import { ICS211Form } from '../components/ICS211Form';
-import { useFormState, type FormRowData } from '../hooks/useFormState';
+import { useFormState, type FormHeaderData, type FormRowData } from '../hooks/useFormState';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { calculateHours } from '../utils/time';
+import { format } from 'date-fns';
 
 const FORM_TYPES = [
-  { value: '211a', label: 'ICS 211A', icon: '📋' },
-  { value: '211b', label: 'ICS 211B', icon: '📄' },
-  { value: 'fitness', label: 'ICS 211 Fitness', icon: '🏋️' },
+  { value: '211a', label: 'ICS 211A' },
+  { value: '211b', label: 'ICS 211B' },
+  { value: 'fitness', label: 'ICS 211 Fitness' },
 ];
 
 const TYPE_LABELS: Record<string, string> = {
@@ -58,36 +67,58 @@ export function ExerciseDetails() {
   const teamTitle = localStorage.getItem('d4h_team_title') || 'Your Team';
   const contextId = localStorage.getItem('d4h_context_id');
 
+  const cachedActivity = useMemo(() => {
+    if (exercise || !id || id.startsWith('local_')) return null;
+    try {
+      const cache = JSON.parse(localStorage.getItem('d4h_activity_cache') || '{}');
+      return (cache[id] as Activity) || null;
+    } catch { return null; }
+  }, [exercise, id]);
+  const currentExercise = exercise || cachedActivity;
+
   const [showResetModal, setShowResetModal] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
-  const [showCalcHours, setShowCalcHours] = useState(false);
-  const [showQualifications, setShowQualifications] = useState(false);
-  const [showPositions, setShowPositions] = useState(false);
-  const [showValidation, setShowValidation] = useState(false);
   const [formType, setFormType] = useState(() => localStorage.getItem(`d4h_form_type_${id}`) || '211a');
+  const [showPhone, setShowPhone] = useState(() => formType === 'fitness');
+  const [showEmail, setShowEmail] = useState(false);
+  const [showId, setShowId] = useState(false);
+  const [showStatus, setShowStatus] = useState(false);
+  const [showRole, setShowRole] = useState(false);
+  const [showPositions, setShowPositions] = useState(false);
+  const [showMedical, setShowMedical] = useState(false);
+  const [showTechnical, setShowTechnical] = useState(false);
+  const [showCalcHours, setShowCalcHours] = useState(false);
+  const [showValidation, setShowValidation] = useState(false);
 
   useEffect(() => {
     if (id) localStorage.setItem(`d4h_form_type_${id}`, formType);
   }, [formType, id]);
 
+  const handleFormTypeChange = (newType: string) => {
+    setFormType(newType);
+    if (newType === 'fitness') {
+      setShowPhone(true);
+    }
+  };
+
   const {
-    formState, isLoading, isPulling, hasLocalChanges, hasConflicts,
-    qualificationsMap, positionsMap,
+    formState, isLoading, isPulling, hasLocalChanges, hasConflicts, hasPendingChanges,
+    medicalMap, technicalMap, positionsMap, idsMap, statusMap, rolesMap, emailMap,
     highlightChanges, setHighlightChanges, updateHeaderCell, updateRowCell,
     addBlankRows, resetChanges, fixConflicts, pullData, removeRow, restoreRow,
-  } = useFormState(id ? (id.startsWith('local_') ? id : parseInt(id, 10)) : undefined, contextId, exercise, teamTitle);
+  } = useFormState(id ? (id.startsWith('local_') ? id : parseInt(id, 10)) : undefined, contextId, currentExercise, teamTitle);
 
   const isLocal = typeof id === 'string' && id.startsWith('local_');
   const activityName = isLocal && formState?.headers?.exerciseName?.value
     ? formState.headers.exerciseName.value
-    : exercise?.referenceDescription || exercise?.description || (exercise as { title?: string })?.title || 'Exercise Details';
+    : currentExercise?.referenceDescription || currentExercise?.description || (currentExercise as { title?: string })?.title || 'Exercise Details';
   useDocumentTitle(activityName);
-  const activityType = exercise?.type || 'local';
+  const activityType = currentExercise?.type || 'local';
   const currentFormLabel = FORM_TYPES.find(f => f.value === formType)?.label ?? formType;
 
   const handlePrint = useReactToPrint({
     contentRef: componentRef,
-    documentTitle: `ICS-211_${activityName.replace(/\s+/g, '_')}_${exercise?.id || id}`,
+    documentTitle: `ICS-211_${activityName.replace(/\s+/g, '_')}_${currentExercise?.id || id}`,
   });
 
   const handleDeleteLocalRoster = () => {
@@ -107,19 +138,7 @@ export function ExerciseDetails() {
   };
 
   const handleExportCsv = () => {
-    let headers: string[] = [];
-    let keys: (keyof FormRowData['cells'])[] = [];
-
-    if (formType === '211a') {
-      headers = ['T CARD', 'NAME (PERSONNEL) -OR- DESCRIPTION (EQUIPMENT)', 'DATE/TIME IN', 'DATE/TIME OUT', 'HOURS', 'ADDITIONAL INFORMATION'];
-      keys = ['tCard', 'name', 'timeIn', 'timeOut', 'hours', 'additionalInfo'];
-    } else if (formType === '211b') {
-      headers = ['T CARD', 'NAME (PERSONNEL) -OR- DESCRIPTION (EQUIPMENT)', 'AGENCY/TEAM', 'TIME IN', 'TIME OUT', 'HOURS', 'ADDITIONAL INFORMATION'];
-      keys = ['tCard', 'name', 'agencyTeam', 'timeIn', 'timeOut', 'hours', 'additionalInfo'];
-    } else if (formType === 'fitness') {
-      headers = ['NAME', 'PHONE', 'TIME IN', 'START WEIGHT', 'LAP 1 START TIME', 'LAP 1 END TIME', 'LAP 2 START TIME', 'LAP 2 END TIME', 'END WEIGHT', 'TIME OUT'];
-      keys = ['name', 'phone', 'timeIn', 'weightStart', 'lap1Start', 'lap1End', 'lap2Start', 'lap2End', 'weightEnd', 'timeOut'];
-    }
+    let extractors: { header: string; getValue: (row: FormRowData) => string }[] = [];
 
     const escapeCsv = (str: string) => {
       if (!str) return '';
@@ -130,31 +149,187 @@ export function ExerciseDetails() {
       return s;
     };
 
-    const rows = formState?.rows
-      .filter(row => !row.isDeleted)
-      .map(row => keys.map(key => {
-        if (key === 'hours' && showCalcHours) {
-          return escapeCsv(calculateHours(row.cells.timeIn?.value || '', row.cells.timeOut?.value || ''));
-        }
-        return escapeCsv((row.cells as Record<keyof FormRowData['cells'], { value: string }>)[key]?.value || '');
-      }).join(',')) || [];
+    if (formType === '211a') {
+      extractors.push({ header: 'T CARD', getValue: r => r.cells.tCard?.value || '' });
+      if (showId) {
+        extractors.push({ header: 'ID', getValue: r => (r.memberId ? idsMap[r.memberId] || '' : '') });
+      }
+      extractors.push({ header: 'NAME (PERSONNEL) -OR- DESCRIPTION (EQUIPMENT)', getValue: r => r.cells.name?.value || '' });
+      if (showStatus) {
+        extractors.push({ header: 'STATUS', getValue: r => (r.memberId ? statusMap[r.memberId] || '' : '') });
+      }
+      if (showRole) {
+        extractors.push({ header: 'ROLE', getValue: r => (r.memberId ? rolesMap[r.memberId] || '' : '') });
+      }
+      if (showPositions) {
+        extractors.push({ header: 'POSITION', getValue: r => (r.memberId ? positionsMap[r.memberId] || '' : '') });
+      }
+      if (showMedical) {
+        extractors.push({ header: 'MEDICAL', getValue: r => (r.memberId ? medicalMap[r.memberId] || '' : '') });
+      }
+      if (showTechnical) {
+        extractors.push({ header: 'TECHNICAL', getValue: r => (r.memberId ? technicalMap[r.memberId] || '' : '') });
+      }
+      if (showPhone) {
+        extractors.push({ header: 'PHONE', getValue: r => r.cells.phone?.value || '' });
+      }
+      if (showEmail) {
+        extractors.push({ header: 'EMAIL', getValue: r => (r.memberId ? emailMap[r.memberId] || '' : '') });
+      }
+      extractors.push({ header: 'DATE/TIME IN', getValue: r => r.cells.timeIn?.value || '' });
+      extractors.push({ header: 'DATE/TIME OUT', getValue: r => r.cells.timeOut?.value || '' });
+      extractors.push({
+        header: 'HOURS',
+        getValue: r => showCalcHours ? calculateHours(r.cells.timeIn?.value || '', r.cells.timeOut?.value || '') : (r.cells.hours?.value || '')
+      });
+      extractors.push({ header: 'ADDITIONAL INFORMATION', getValue: r => r.cells.additionalInfo?.value || '' });
+    } else if (formType === '211b') {
+      extractors.push({ header: 'T CARD', getValue: r => r.cells.tCard?.value || '' });
+      if (showId) {
+        extractors.push({ header: 'ID', getValue: r => (r.memberId ? idsMap[r.memberId] || '' : '') });
+      }
+      extractors.push({ header: 'NAME (PERSONNEL) -OR- DESCRIPTION (EQUIPMENT)', getValue: r => r.cells.name?.value || '' });
+      if (showStatus) {
+        extractors.push({ header: 'STATUS', getValue: r => (r.memberId ? statusMap[r.memberId] || '' : '') });
+      }
+      if (showRole) {
+        extractors.push({ header: 'ROLE', getValue: r => (r.memberId ? rolesMap[r.memberId] || '' : '') });
+      }
+      if (showPositions) {
+        extractors.push({ header: 'POSITION', getValue: r => (r.memberId ? positionsMap[r.memberId] || '' : '') });
+      }
+      if (showMedical) {
+        extractors.push({ header: 'MEDICAL', getValue: r => (r.memberId ? medicalMap[r.memberId] || '' : '') });
+      }
+      if (showTechnical) {
+        extractors.push({ header: 'TECHNICAL', getValue: r => (r.memberId ? technicalMap[r.memberId] || '' : '') });
+      }
+      if (showPhone) {
+        extractors.push({ header: 'PHONE', getValue: r => r.cells.phone?.value || '' });
+      }
+      if (showEmail) {
+        extractors.push({ header: 'EMAIL', getValue: r => (r.memberId ? emailMap[r.memberId] || '' : '') });
+      }
+      extractors.push({ header: 'AGENCY/TEAM', getValue: r => r.cells.agencyTeam?.value || '' });
+      extractors.push({ header: 'TIME IN', getValue: r => r.cells.timeIn?.value || '' });
+      extractors.push({ header: 'TIME OUT', getValue: r => r.cells.timeOut?.value || '' });
+      extractors.push({
+        header: 'HOURS',
+        getValue: r => showCalcHours ? calculateHours(r.cells.timeIn?.value || '', r.cells.timeOut?.value || '') : (r.cells.hours?.value || '')
+      });
+      extractors.push({ header: 'ADDITIONAL INFORMATION', getValue: r => r.cells.additionalInfo?.value || '' });
+    } else if (formType === 'fitness') {
+      if (showId) {
+        extractors.push({ header: 'ID', getValue: r => (r.memberId ? idsMap[r.memberId] || '' : '') });
+      }
+      extractors.push({ header: 'NAME', getValue: r => r.cells.name?.value || '' });
+      if (showStatus) {
+        extractors.push({ header: 'STATUS', getValue: r => (r.memberId ? statusMap[r.memberId] || '' : '') });
+      }
+      if (showRole) {
+        extractors.push({ header: 'ROLE', getValue: r => (r.memberId ? rolesMap[r.memberId] || '' : '') });
+      }
+      if (showPositions) {
+        extractors.push({ header: 'POSITION', getValue: r => (r.memberId ? positionsMap[r.memberId] || '' : '') });
+      }
+      if (showMedical) {
+        extractors.push({ header: 'MEDICAL', getValue: r => (r.memberId ? medicalMap[r.memberId] || '' : '') });
+      }
+      if (showTechnical) {
+        extractors.push({ header: 'TECHNICAL', getValue: r => (r.memberId ? technicalMap[r.memberId] || '' : '') });
+      }
+      if (showPhone) {
+        extractors.push({ header: 'PHONE', getValue: r => r.cells.phone?.value || '' });
+      }
+      if (showEmail) {
+        extractors.push({ header: 'EMAIL', getValue: r => (r.memberId ? emailMap[r.memberId] || '' : '') });
+      }
+      extractors.push({ header: 'TIME IN', getValue: r => r.cells.timeIn?.value || '' });
+      extractors.push({ header: 'START WEIGHT', getValue: r => r.cells.weightStart?.value || '' });
+      extractors.push({ header: 'LAP 1 START TIME', getValue: r => r.cells.lap1Start?.value || '' });
+      extractors.push({ header: 'LAP 1 END TIME', getValue: r => r.cells.lap1End?.value || '' });
+      extractors.push({ header: 'LAP 2 START TIME', getValue: r => r.cells.lap2Start?.value || '' });
+      extractors.push({ header: 'LAP 2 END TIME', getValue: r => r.cells.lap2End?.value || '' });
+      extractors.push({ header: 'END WEIGHT', getValue: r => r.cells.weightEnd?.value || '' });
+      extractors.push({ header: 'TIME OUT', getValue: r => r.cells.timeOut?.value || '' });
+      if (showCalcHours) {
+        extractors.push({
+          header: 'CALC. HOURS',
+          getValue: r => calculateHours(r.cells.timeIn?.value || '', r.cells.timeOut?.value || '')
+        });
+      }
+    }
 
-    const csvContent = [headers.join(','), ...rows].join('\n');
+    const isMultiPeriod = !!(formState?.periods && formState.periods.length > 1);
 
+    if (isMultiPeriod) {
+      extractors.unshift({
+        header: 'OPERATIONAL PERIOD',
+        getValue: (r: any) => r._periodLabel || ''
+      });
+    }
+
+    const headers = extractors.map(e => escapeCsv(e.header)).join(',');
+    let rows: string[] = [];
+
+    if (isMultiPeriod && formState?.periods) {
+      rows = formState.periods.flatMap(p => {
+        return p.rows
+          .filter(r => !r.isDeleted)
+          .map(row => {
+            const rowWithPeriod = { ...row, _periodLabel: p.label };
+            return extractors.map(e => escapeCsv(e.getValue(rowWithPeriod as any))).join(',');
+          });
+      });
+    } else {
+      rows = (formState?.rows || [])
+        .filter(r => !r.isDeleted)
+        .map(row => {
+          return extractors.map(e => escapeCsv(e.getValue(row))).join(',');
+        });
+    }
+
+    const csvContent = [headers, ...rows].join('\n');
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const link = document.createElement('a');
     const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
     link.setAttribute('href', url);
-    link.setAttribute('download', `ICS-211_${activityName.replace(/\\s+/g, '_')}_${exercise?.id || id}.csv`);
-    link.style.visibility = 'hidden';
+    link.setAttribute('download', `ICS-211_${activityName.replace(/\s+/g, '_')}_${currentExercise?.id || id}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
   };
 
-  if (!id || (!isLocal && !contextId) || !exercise) {
+  if (!id || (!isLocal && !contextId) || (!isLocal && !currentExercise)) {
     return <Navigate to="/" replace />;
   }
+
+  const commonFormProps = {
+    ref: componentRef,
+    formState: formState!,
+    showPhone,
+    showEmail,
+    emailMap,
+    showCalcHours,
+    showId,
+    idsMap,
+    showStatus,
+    statusMap,
+    showRole,
+    rolesMap,
+    showPositions,
+    positionsMap,
+    showMedical,
+    medicalMap,
+    showTechnical,
+    technicalMap,
+    highlightChanges,
+    activityType,
+    onUpdateHeader: updateHeaderCell,
+    onUpdateRow: updateRowCell,
+    onRemoveRow: removeRow,
+    onRestoreRow: restoreRow,
+  };
 
   return (
     <Tooltip.Provider delayDuration={400}>
@@ -215,30 +390,72 @@ export function ExerciseDetails() {
             {/* Right: actions */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
 
-              {/* Refresh */}
+              {/* Split button: D4H Event link + Refresh icon */}
               {!isLocal && (
-                <Tooltip.Root>
-                  <Tooltip.Trigger asChild>
-                    <button
-                      className="btn btn-sm"
-                      onClick={() => pullData()}
-                      disabled={isPulling}
-                      style={{
-                        background: 'rgba(255,255,255,0.1)',
-                        color: 'rgba(255,255,255,0.85)',
-                        border: '1px solid rgba(255,255,255,0.18)',
-                      }}
-                    >
-                      <RefreshCw size={14} style={isPulling ? { animation: 'spin 1s linear infinite' } : {}} />
-                      Refresh from D4H
-                    </button>
-                  </Tooltip.Trigger>
-                  <Tooltip.Portal>
-                    <Tooltip.Content className="tooltip-content" sideOffset={5}>
-                      Pull latest attendee data from D4H
-                    </Tooltip.Content>
-                  </Tooltip.Portal>
-                </Tooltip.Root>
+                <div style={{ display: 'inline-flex', alignItems: 'stretch', height: 29 }}>
+                  <Tooltip.Root>
+                    <Tooltip.Trigger asChild>
+                      <button
+                        className="btn btn-sm"
+                        onClick={() => window.open(getD4HActivityUrl(exercise?.id || id || '', activityType), '_blank', 'noopener,noreferrer')}
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          gap: 6,
+                          height: '100%',
+                          boxSizing: 'border-box',
+                          background: 'rgba(255,255,255,0.1)',
+                          color: 'rgba(255,255,255,0.85)',
+                          border: '1px solid rgba(255,255,255,0.18)',
+                          borderTopRightRadius: 0,
+                          borderBottomRightRadius: 0,
+                          borderRight: 'none',
+                        }}
+                      >
+                        <ExternalLink size={13} className="header-icon-responsive" />
+                        <span>D4H event</span>
+                      </button>
+                    </Tooltip.Trigger>
+                    <Tooltip.Portal>
+                      <Tooltip.Content className="tooltip-content" side="top" sideOffset={5}>
+                        Open event page in D4H
+                      </Tooltip.Content>
+                    </Tooltip.Portal>
+                  </Tooltip.Root>
+
+                  <Tooltip.Root>
+                    <Tooltip.Trigger asChild>
+                      <button
+                        className="btn btn-sm"
+                        onClick={() => pullData()}
+                        disabled={isPulling}
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          height: '100%',
+                          boxSizing: 'border-box',
+                          background: hasPendingChanges ? 'var(--gold-6)' : 'rgba(255,255,255,0.1)',
+                          color: hasPendingChanges ? 'var(--navy-9)' : 'rgba(255,255,255,0.85)',
+                          border: hasPendingChanges ? '1px solid var(--gold-6)' : '1px solid rgba(255,255,255,0.18)',
+                          borderTopLeftRadius: 0,
+                          borderBottomLeftRadius: 0,
+                          paddingLeft: 8,
+                          paddingRight: 8,
+                          fontWeight: hasPendingChanges ? 700 : 600,
+                        }}
+                      >
+                        <RefreshCw size={14} style={isPulling ? { animation: 'spin 1s linear infinite' } : {}} />
+                      </button>
+                    </Tooltip.Trigger>
+                    <Tooltip.Portal>
+                      <Tooltip.Content className="tooltip-content" side="top" sideOffset={5}>
+                        {hasPendingChanges ? 'Pending changes available in D4H. Click to sync.' : 'Pull latest attendee data from D4H'}
+                      </Tooltip.Content>
+                    </Tooltip.Portal>
+                  </Tooltip.Root>
+                </div>
               )}
 
               {/* Changes dropdown */}
@@ -307,52 +524,6 @@ export function ExerciseDetails() {
                         </div>
                         <Switch.Root
                           checked={showCalcHours}
-                          className="switch-root"
-                          style={{ pointerEvents: 'none' }}
-                        >
-                          <Switch.Thumb className="switch-thumb" />
-                        </Switch.Root>
-                      </DropdownMenu.Item>
-
-                      {formType !== 'fitness' && (
-                        <DropdownMenu.Item
-                          onSelect={(e) => { e.preventDefault(); setShowQualifications(!showQualifications); }}
-                          style={{
-                            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                            padding: '8px 12px', borderRadius: 6, cursor: 'pointer', outline: 'none',
-                            fontSize: '0.875rem', color: 'var(--slate-12)',
-                          }}
-                          className="select-item no-print"
-                        >
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                            <Award size={14} style={{ color: 'var(--slate-9)' }} />
-                            Show qualifications
-                          </div>
-                          <Switch.Root
-                            checked={showQualifications}
-                            className="switch-root"
-                            style={{ pointerEvents: 'none' }}
-                          >
-                            <Switch.Thumb className="switch-thumb" />
-                          </Switch.Root>
-                        </DropdownMenu.Item>
-                      )}
-
-                      <DropdownMenu.Item
-                        onSelect={(e) => { e.preventDefault(); setShowPositions(!showPositions); }}
-                        style={{
-                          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                          padding: '8px 12px', borderRadius: 6, cursor: 'pointer', outline: 'none',
-                          fontSize: '0.875rem', color: 'var(--slate-12)',
-                        }}
-                        className="select-item no-print"
-                      >
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                          <UserCheck size={14} style={{ color: 'var(--slate-9)' }} />
-                          Show position
-                        </div>
-                        <Switch.Root
-                          checked={showPositions}
                           className="switch-root"
                           style={{ pointerEvents: 'none' }}
                         >
@@ -445,8 +616,8 @@ export function ExerciseDetails() {
                     className="btn btn-sm"
                     style={{ background: 'var(--gold-6)', color: 'var(--navy-9)', fontWeight: 700 }}
                   >
-                    <FileText size={14} />
-                    Export
+                    <FileText size={14} className="header-icon-responsive" />
+                    <span>Export</span>
                     <ChevronDown size={13} />
                   </button>
                 </DropdownMenu.Trigger>
@@ -496,7 +667,7 @@ export function ExerciseDetails() {
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <FileText size={16} style={{ color: 'var(--slate-9)' }} />
                 <span style={{ fontWeight: 600, fontSize: '0.9375rem', color: 'var(--slate-12)' }}>
-                  Roster Configuration
+                  Form Builder
                 </span>
                 <span style={{ fontSize: '0.8125rem', color: 'var(--slate-10)' }}>· auto-saved locally</span>
               </div>
@@ -507,8 +678,8 @@ export function ExerciseDetails() {
                   <Label.Root style={{ fontSize: '0.8125rem', fontWeight: 500, color: 'var(--slate-11)', whiteSpace: 'nowrap' }}>
                     Form Type
                   </Label.Root>
-                  <Select.Root value={formType} onValueChange={setFormType}>
-                    <Select.Trigger className="select-trigger" style={{ minWidth: 160 }}>
+                  <Select.Root value={formType} onValueChange={handleFormTypeChange}>
+                    <Select.Trigger className="select-trigger">
                       <Select.Value />
                       <Select.Icon><ChevronDown size={14} /></Select.Icon>
                     </Select.Trigger>
@@ -517,12 +688,7 @@ export function ExerciseDetails() {
                         <Select.Viewport>
                           {FORM_TYPES.map(ft => (
                             <Select.Item key={ft.value} value={ft.value} className="select-item">
-                              <Select.ItemText>
-                                <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                                  <span>{ft.icon}</span>
-                                  <span>{ft.label}</span>
-                                </span>
-                              </Select.ItemText>
+                              <Select.ItemText>{ft.label}</Select.ItemText>
                               <Select.ItemIndicator style={{ marginLeft: 'auto' }}>
                                 <Check size={13} style={{ color: 'var(--indigo-9)' }} />
                               </Select.ItemIndicator>
@@ -534,20 +700,224 @@ export function ExerciseDetails() {
                   </Select.Root>
                 </div>
 
-                <Separator.Root className="separator" style={{ width: 1, height: 20 }} orientation="vertical" />
+                {/* Data dropdown */}
+                <DropdownMenu.Root>
+                  <DropdownMenu.Trigger asChild>
+                    <button className="select-trigger" style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, width: 'auto' }}>
+                      <span>Columns</span>
+                      <ChevronDown size={14} />
+                    </button>
+                  </DropdownMenu.Trigger>
 
-                {/* Add rows */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <Label.Root style={{ fontSize: '0.8125rem', fontWeight: 500, color: 'var(--slate-11)', whiteSpace: 'nowrap' }}>
-                    Add rows
-                  </Label.Root>
-                  <button className="btn btn-secondary btn-sm" onClick={() => addBlankRows(1)}>
-                    <Plus size={13} /> 1
-                  </button>
-                  <button className="btn btn-secondary btn-sm" onClick={() => addBlankRows(5)}>
-                    <Plus size={13} /> 5
-                  </button>
-                </div>
+                  <DropdownMenu.Portal>
+                    <DropdownMenu.Content
+                      className="select-content"
+                      align="start"
+                      sideOffset={6}
+                      style={{ padding: 4, width: 'max-content' }}
+                    >
+                      <DropdownMenu.Item
+                        onSelect={(e) => { e.preventDefault(); setShowPhone(!showPhone); }}
+                        style={{
+                          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                          gap: 16, padding: '7px 10px', borderRadius: 6, cursor: 'pointer', outline: 'none',
+                          fontSize: '0.8125rem', color: 'var(--slate-12)',
+                        }}
+                        className="select-item"
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <Phone size={14} style={{ color: 'var(--slate-9)' }} />
+                          Phone numbers
+                        </div>
+                        <Switch.Root
+                          checked={showPhone}
+                          className="switch-root"
+                          style={{ pointerEvents: 'none' }}
+                        >
+                          <Switch.Thumb className="switch-thumb" />
+                        </Switch.Root>
+                      </DropdownMenu.Item>
+
+                      <DropdownMenu.Item
+                        onSelect={(e) => { e.preventDefault(); setShowEmail(!showEmail); }}
+                        style={{
+                          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                          gap: 16, padding: '7px 10px', borderRadius: 6, cursor: 'pointer', outline: 'none',
+                          fontSize: '0.8125rem', color: 'var(--slate-12)',
+                        }}
+                        className="select-item"
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <Mail size={14} style={{ color: 'var(--slate-9)' }} />
+                          Email
+                        </div>
+                        <Switch.Root
+                          checked={showEmail}
+                          className="switch-root"
+                          style={{ pointerEvents: 'none' }}
+                        >
+                          <Switch.Thumb className="switch-thumb" />
+                        </Switch.Root>
+                      </DropdownMenu.Item>
+
+                      <DropdownMenu.Item
+                        onSelect={(e) => { e.preventDefault(); setShowId(!showId); }}
+                        style={{
+                          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                          gap: 16, padding: '7px 10px', borderRadius: 6, cursor: 'pointer', outline: 'none',
+                          fontSize: '0.8125rem', color: 'var(--slate-12)',
+                        }}
+                        className="select-item no-print"
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <Hash size={14} style={{ color: 'var(--slate-9)' }} />
+                          ID
+                        </div>
+                        <Switch.Root
+                          checked={showId}
+                          className="switch-root"
+                          style={{ pointerEvents: 'none' }}
+                        >
+                          <Switch.Thumb className="switch-thumb" />
+                        </Switch.Root>
+                      </DropdownMenu.Item>
+
+                      <DropdownMenu.Item
+                        onSelect={(e) => { e.preventDefault(); setShowStatus(!showStatus); }}
+                        style={{
+                          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                          gap: 16, padding: '7px 10px', borderRadius: 6, cursor: 'pointer', outline: 'none',
+                          fontSize: '0.8125rem', color: 'var(--slate-12)',
+                        }}
+                        className="select-item no-print"
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <Shield size={14} style={{ color: 'var(--slate-9)' }} />
+                          Status
+                        </div>
+                        <Switch.Root
+                          checked={showStatus}
+                          className="switch-root"
+                          style={{ pointerEvents: 'none' }}
+                        >
+                          <Switch.Thumb className="switch-thumb" />
+                        </Switch.Root>
+                      </DropdownMenu.Item>
+
+                      <DropdownMenu.Item
+                        onSelect={(e) => { e.preventDefault(); setShowRole(!showRole); }}
+                        style={{
+                          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                          gap: 16, padding: '7px 10px', borderRadius: 6, cursor: 'pointer', outline: 'none',
+                          fontSize: '0.8125rem', color: 'var(--slate-12)',
+                        }}
+                        className="select-item no-print"
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <Briefcase size={14} style={{ color: 'var(--slate-9)' }} />
+                          Role
+                        </div>
+                        <Switch.Root
+                          checked={showRole}
+                          className="switch-root"
+                          style={{ pointerEvents: 'none' }}
+                        >
+                          <Switch.Thumb className="switch-thumb" />
+                        </Switch.Root>
+                      </DropdownMenu.Item>
+
+                      <DropdownMenu.Item
+                        onSelect={(e) => { e.preventDefault(); setShowPositions(!showPositions); }}
+                        style={{
+                          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                          gap: 16, padding: '7px 10px', borderRadius: 6, cursor: 'pointer', outline: 'none',
+                          fontSize: '0.8125rem', color: 'var(--slate-12)',
+                        }}
+                        className="select-item no-print"
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <UserCheck size={14} style={{ color: 'var(--slate-9)' }} />
+                          Position
+                        </div>
+                        <Switch.Root
+                          checked={showPositions}
+                          className="switch-root"
+                          style={{ pointerEvents: 'none' }}
+                        >
+                          <Switch.Thumb className="switch-thumb" />
+                        </Switch.Root>
+                      </DropdownMenu.Item>
+
+                      <DropdownMenu.Item
+                        onSelect={(e) => { e.preventDefault(); setShowMedical(!showMedical); }}
+                        style={{
+                          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                          gap: 16, padding: '7px 10px', borderRadius: 6, cursor: 'pointer', outline: 'none',
+                          fontSize: '0.8125rem', color: 'var(--slate-12)',
+                        }}
+                        className="select-item no-print"
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <HeartPulse size={14} style={{ color: 'var(--slate-9)' }} />
+                          Medical
+                        </div>
+                        <Switch.Root
+                          checked={showMedical}
+                          className="switch-root"
+                          style={{ pointerEvents: 'none' }}
+                        >
+                          <Switch.Thumb className="switch-thumb" />
+                        </Switch.Root>
+                      </DropdownMenu.Item>
+
+                      <DropdownMenu.Item
+                        onSelect={(e) => { e.preventDefault(); setShowTechnical(!showTechnical); }}
+                        style={{
+                          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                          gap: 16, padding: '7px 10px', borderRadius: 6, cursor: 'pointer', outline: 'none',
+                          fontSize: '0.8125rem', color: 'var(--slate-12)',
+                        }}
+                        className="select-item no-print"
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <Wrench size={14} style={{ color: 'var(--slate-9)' }} />
+                          Technical
+                        </div>
+                        <Switch.Root
+                          checked={showTechnical}
+                          className="switch-root"
+                          style={{ pointerEvents: 'none' }}
+                        >
+                          <Switch.Thumb className="switch-thumb" />
+                        </Switch.Root>
+                      </DropdownMenu.Item>
+                    </DropdownMenu.Content>
+                  </DropdownMenu.Portal>
+                </DropdownMenu.Root>
+
+                {/* Add rows (only shown when not multi-period, since multi-period pages have their own row buttons) */}
+                {(!formState?.periods || formState.periods.length <= 1) && (
+                  <>
+                    <Separator.Root className="separator" style={{ width: 1, height: 20 }} orientation="vertical" />
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <Label.Root style={{ fontSize: '0.8125rem', fontWeight: 500, color: 'var(--slate-11)', whiteSpace: 'nowrap' }}>
+                        Add rows
+                      </Label.Root>
+                      <button
+                        className="btn btn-secondary btn-sm"
+                        onClick={() => addBlankRows(1)}
+                      >
+                        <Plus size={13} /> 1
+                      </button>
+                      <button
+                        className="btn btn-secondary btn-sm"
+                        onClick={() => addBlankRows(5)}
+                      >
+                        <Plus size={13} /> 5
+                      </button>
+                    </div>
+                  </>
+                )}
               </div>
             </div>
           </div>
@@ -585,31 +955,108 @@ export function ExerciseDetails() {
                 Loading roster data…
               </p>
             </div>
+          ) : !formState ? (
+            <Navigate to="/" replace />
           ) : (
-            <div style={{
-              borderRadius: 8, overflow: 'hidden',
-              boxShadow: '0 2px 20px rgba(0,0,0,0.08)',
-              border: '1px solid var(--slate-5)',
-            }}>
-              {formType === 'fitness' && (
-                <ICS211Form ref={componentRef} formState={formState} showCalcHours={showCalcHours} showValidation={showValidation}
-                  showPositions={showPositions} positionsMap={positionsMap}
-                  highlightChanges={highlightChanges} activityType={activityType} onUpdateHeader={updateHeaderCell}
-                  onUpdateRow={updateRowCell} onRemoveRow={removeRow} onRestoreRow={restoreRow} />
-              )}
-              {formType === '211a' && (
-                <ICS211AForm ref={componentRef} formState={formState} showCalcHours={showCalcHours}
-                  showQualifications={showQualifications} qualificationsMap={qualificationsMap}
-                  showPositions={showPositions} positionsMap={positionsMap}
-                  highlightChanges={highlightChanges} activityType={activityType} onUpdateHeader={updateHeaderCell}
-                  onUpdateRow={updateRowCell} onRemoveRow={removeRow} onRestoreRow={restoreRow} />
-              )}
-              {formType === '211b' && (
-                <ICS211BForm ref={componentRef} formState={formState} showCalcHours={showCalcHours}
-                  showQualifications={showQualifications} qualificationsMap={qualificationsMap}
-                  showPositions={showPositions} positionsMap={positionsMap}
-                  highlightChanges={highlightChanges} activityType={activityType} onUpdateHeader={updateHeaderCell}
-                  onUpdateRow={updateRowCell} onRemoveRow={removeRow} onRestoreRow={restoreRow} />
+            <div ref={componentRef} className="operational-periods-wrapper" style={{ display: 'flex', flexDirection: 'column', gap: 32 }}>
+              {formState.periods && formState.periods.length > 1 ? (
+                formState.periods.map((period, pIdx) => {
+                  const isLastPeriod = pIdx === formState.periods!.length - 1;
+                  const periodState = {
+                    headers: period.headers,
+                    rows: period.rows
+                  };
+                  const periodCommonProps = {
+                    formState: periodState,
+                    showPhone,
+                    showEmail,
+                    emailMap,
+                    showCalcHours,
+                    showId,
+                    idsMap,
+                    showStatus,
+                    statusMap,
+                    showRole,
+                    rolesMap,
+                    showPositions,
+                    positionsMap,
+                    showMedical,
+                    medicalMap,
+                    showTechnical,
+                    technicalMap,
+                    highlightChanges,
+                    onUpdateHeader: (key: keyof FormHeaderData, val: string) => updateHeaderCell(key, val, pIdx),
+                    onUpdateRow: (rowId: string, colKey: keyof FormRowData['cells'], val: string) => updateRowCell(rowId, colKey, val, pIdx),
+                    onRemoveRow: (rowId: string) => removeRow(rowId),
+                    onRestoreRow: (rowId: string) => restoreRow(rowId),
+                    typeLabel: TYPE_LABELS[activityType] || 'Exercise'
+                  };
+
+                  return (
+                    <div
+                      key={period.id}
+                      className="operational-period-page"
+                      style={{
+                        pageBreakAfter: isLastPeriod ? 'auto' : 'always',
+                        breakAfter: isLastPeriod ? 'auto' : 'page',
+                      }}
+                    >
+                      {/* Period Label Banner on Screen */}
+                      <div className="no-print" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8, padding: '0 4px' }}>
+                        <span style={{ fontSize: '0.8125rem', fontWeight: 600, color: 'var(--slate-11)' }}>
+                          Operational Period {pIdx + 1} of {formState.periods!.length} · {(() => {
+                            try {
+                              const rawDate = period.id.startsWith('period_') ? period.id.replace('period_', '') : period.date;
+                              return format(new Date(rawDate.includes('-') ? `${rawDate}T12:00:00` : rawDate), 'EEE, MMM d');
+                            } catch {
+                              return period.date;
+                            }
+                          })()}
+                        </span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <button
+                            className="btn btn-secondary btn-sm"
+                            style={{ fontSize: '0.75rem', padding: '3px 8px', height: 'auto' }}
+                            onClick={() => addBlankRows(1, pIdx)}
+                            title="Add 1 row"
+                          >
+                            <Plus size={12} style={{ marginRight: 4 }} /> Add Row
+                          </button>
+                          <button
+                            className="btn btn-secondary btn-sm"
+                            style={{ fontSize: '0.75rem', padding: '3px 8px', height: 'auto' }}
+                            onClick={() => addBlankRows(5, pIdx)}
+                            title="Add 5 rows"
+                          >
+                            + 5 Rows
+                          </button>
+                        </div>
+                      </div>
+
+                      {formType === 'fitness' && (
+                        <ICS211Form {...periodCommonProps} showValidation={showValidation} />
+                      )}
+                      {formType === '211a' && (
+                        <ICS211AForm {...periodCommonProps} />
+                      )}
+                      {formType === '211b' && (
+                        <ICS211BForm {...periodCommonProps} />
+                      )}
+                    </div>
+                  );
+                })
+              ) : (
+                <div>
+                  {formType === 'fitness' && (
+                    <ICS211Form {...commonFormProps} showValidation={showValidation} />
+                  )}
+                  {formType === '211a' && (
+                    <ICS211AForm {...commonFormProps} />
+                  )}
+                  {formType === '211b' && (
+                    <ICS211BForm {...commonFormProps} />
+                  )}
+                </div>
               )}
             </div>
           )}

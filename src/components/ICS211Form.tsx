@@ -5,10 +5,23 @@ interface ICS211FormProps {
   formState: FormStateData;
   highlightChanges: boolean;
   activityType?: 'exercise' | 'event' | 'incident';
+  showPhone?: boolean;
+  showEmail?: boolean;
+  emailMap?: Record<number, string>;
   showCalcHours?: boolean;
   showValidation?: boolean;
+  showId?: boolean;
+  idsMap?: Record<number, string>;
+  showStatus?: boolean;
+  statusMap?: Record<number, string>;
+  showRole?: boolean;
+  rolesMap?: Record<number, string>;
   showPositions?: boolean;
   positionsMap?: Record<number, string>;
+  showMedical?: boolean;
+  medicalMap?: Record<number, string>;
+  showTechnical?: boolean;
+  technicalMap?: Record<number, string>;
   onUpdateHeader: (key: keyof FormHeaderData, value: string) => void;
   onUpdateRow: (rowId: string, colKey: keyof FormRowData['cells'], value: string) => void;
   onRemoveRow?: (rowId: string) => void;
@@ -19,7 +32,7 @@ import { calculateHours, calculateMinutesDiff, formatDuration } from '../utils/t
 import { EditableCell } from './EditableCell';
 
 export const ICS211Form = forwardRef<HTMLDivElement, ICS211FormProps>(
-  ({ formState, highlightChanges, activityType = 'exercise', showCalcHours = false, showValidation = false, showPositions = false, positionsMap = {}, onUpdateHeader, onUpdateRow, onRemoveRow, onRestoreRow }, ref) => {
+  ({ formState, highlightChanges, activityType = 'exercise', showPhone = true, showEmail = false, emailMap = {}, showCalcHours = false, showValidation = false, showId = false, idsMap = {}, showStatus = false, statusMap = {}, showRole = false, rolesMap = {}, showPositions = false, positionsMap = {}, showMedical = false, medicalMap = {}, showTechnical = false, technicalMap = {}, onUpdateHeader, onUpdateRow, onRemoveRow, onRestoreRow }, ref) => {
     const typeLabel = activityType === 'incident' ? 'INCIDENT' : activityType === 'event' ? 'EVENT' : 'EXERCISE';
 
     const [contextMenu, setContextMenu] = useState<{ x: number, y: number, actions: { label: string, onClick?: () => void, danger?: boolean, isInfo?: boolean, isError?: boolean, isSuccess?: boolean }[] } | null>(null);
@@ -47,6 +60,75 @@ export const ICS211Form = forwardRef<HTMLDivElement, ICS211FormProps>(
 
     // Tweak this value to adjust how far left the custom menu spawns relative to the cursor
     const CONTEXT_MENU_X_OFFSET = 200;
+
+    const extraColsCount =
+      (showId ? 1 : 0) +
+      (showStatus ? 1 : 0) +
+      (showRole ? 1 : 0) +
+      (showPositions ? 1 : 0) +
+      (showMedical ? 1 : 0) +
+      (showTechnical ? 1 : 0) +
+      (showPhone ? 1 : 0) +
+      (showEmail ? 1 : 0);
+
+    const baseMetricWidth = showCalcHours ? 6.5 : 7.2;
+    const calcHoursWidth = showCalcHours ? 5.0 : 0;
+    const initialMetricsTotal = baseMetricWidth * 8 + calcHoursWidth;
+    const initialPersonnelAvail = 100 - initialMetricsTotal;
+
+    const baseWeights = {
+      id: 6.0,
+      status: 7.0,
+      role: 6.5,
+      positions: 6.5,
+      medical: 6.0,
+      technical: 9.0,
+      phone: 11.5,
+      email: 11.0,
+    };
+
+    let totalBaseExtras = 0;
+    if (showId) totalBaseExtras += baseWeights.id;
+    if (showStatus) totalBaseExtras += baseWeights.status;
+    if (showRole) totalBaseExtras += baseWeights.role;
+    if (showPositions) totalBaseExtras += baseWeights.positions;
+    if (showMedical) totalBaseExtras += baseWeights.medical;
+    if (showTechnical) totalBaseExtras += baseWeights.technical;
+    if (showPhone) totalBaseExtras += baseWeights.phone;
+    if (showEmail) totalBaseExtras += baseWeights.email;
+
+    const minNameWidth = 14.0;
+    const maxExtrasAllowed = initialPersonnelAvail - minNameWidth;
+
+    let scaleFactor = 1.0;
+    let actualMetricWidth = baseMetricWidth;
+    let actualCalcHoursWidth = calcHoursWidth;
+    let availableForPersonnel = initialPersonnelAvail;
+
+    if (totalBaseExtras > maxExtrasAllowed) {
+      const extraDeficit = totalBaseExtras - maxExtrasAllowed;
+      const metricCompression = Math.min(extraDeficit * 0.35, showCalcHours ? 10.4 : 16.0);
+      actualMetricWidth = baseMetricWidth - metricCompression / 8;
+      actualCalcHoursWidth = calcHoursWidth ? calcHoursWidth - 0.5 : 0;
+      availableForPersonnel = 100 - (actualMetricWidth * 8 + actualCalcHoursWidth);
+
+      const newMaxExtras = availableForPersonnel - 12.0;
+      scaleFactor = Math.min(1.0, newMaxExtras / totalBaseExtras);
+    }
+
+    const idWidth = `${(baseWeights.id * scaleFactor).toFixed(1)}%`;
+    const statusWidth = `${(baseWeights.status * scaleFactor).toFixed(1)}%`;
+    const roleWidth = `${(baseWeights.role * scaleFactor).toFixed(1)}%`;
+    const positionsWidth = `${(baseWeights.positions * scaleFactor).toFixed(1)}%`;
+    const medicalWidth = `${(baseWeights.medical * scaleFactor).toFixed(1)}%`;
+    const technicalWidth = `${(baseWeights.technical * scaleFactor).toFixed(1)}%`;
+    const phoneWidth = `${(baseWeights.phone * scaleFactor).toFixed(1)}%`;
+    const emailWidth = `${(baseWeights.email * scaleFactor).toFixed(1)}%`;
+
+    const actualExtrasTotal = totalBaseExtras * scaleFactor;
+    const nameWidth = `${Math.max(12, availableForPersonnel - actualExtrasTotal).toFixed(1)}%`;
+    const metricWidth = `${actualMetricWidth.toFixed(1)}%`;
+    const calcHoursWidthStr = `${actualCalcHoursWidth.toFixed(1)}%`;
 
     return (
       <div ref={ref} className="bg-white p-8 font-sans text-black max-w-[11in] mx-auto print:p-0 print:m-0 relative">
@@ -102,22 +184,28 @@ export const ICS211Form = forwardRef<HTMLDivElement, ICS211FormProps>(
 
         <table className="w-full table-fixed border-collapse border-2 border-black text-xs print:text-[10px]">
           <colgroup>
-            <col style={{ width: showPositions ? (showCalcHours ? '13%' : '14%') : (showCalcHours ? '15%' : '18%') }} />
-            {showPositions && <col style={{ width: '12%' }} />}
-            <col style={{ width: showPositions ? (showCalcHours ? '9%' : '10%') : (showCalcHours ? '11%' : '14%') }} />
-            <col style={{ width: '8.5%' }} />
-            <col style={{ width: '8.5%' }} />
-            <col style={{ width: '8.5%' }} />
-            <col style={{ width: '8.5%' }} />
-            <col style={{ width: '8.5%' }} />
-            <col style={{ width: '8.5%' }} />
-            <col style={{ width: '8.5%' }} />
-            <col style={{ width: '8.5%' }} />
-            {showCalcHours && <col style={{ width: '6%' }} />}
+            {showId && <col style={{ width: idWidth }} />}
+            <col style={{ width: nameWidth }} />
+            {showStatus && <col style={{ width: statusWidth }} />}
+            {showRole && <col style={{ width: roleWidth }} />}
+            {showPositions && <col style={{ width: positionsWidth }} />}
+            {showMedical && <col style={{ width: medicalWidth }} />}
+            {showTechnical && <col style={{ width: technicalWidth }} />}
+            {showPhone && <col style={{ width: phoneWidth }} />}
+            {showEmail && <col style={{ width: emailWidth }} />}
+            <col style={{ width: metricWidth }} />
+            <col style={{ width: metricWidth }} />
+            <col style={{ width: metricWidth }} />
+            <col style={{ width: metricWidth }} />
+            <col style={{ width: metricWidth }} />
+            <col style={{ width: metricWidth }} />
+            <col style={{ width: metricWidth }} />
+            <col style={{ width: metricWidth }} />
+            {showCalcHours && <col style={{ width: calcHoursWidthStr }} />}
           </colgroup>
           <thead className="table-header-group">
             <tr>
-              <td colSpan={(showCalcHours ? 11 : 10) + (showPositions ? 1 : 0)} className="p-0 border-0">
+              <td colSpan={9 + extraColsCount + (showCalcHours ? 1 : 0)} className="p-0 border-0">
                 {/* Header Information Section */}
                 <div className="grid grid-cols-4 border-b-2 border-black">
                   <div className="col-span-1 border-r border-black p-2 flex flex-col justify-center items-center min-w-0">
@@ -206,21 +294,41 @@ export const ICS211Form = forwardRef<HTMLDivElement, ICS211FormProps>(
             </tr>
             {/* Column Headers */}
             <tr className="bg-gray-50/50 border-y-2 border-black">
-              <th className="border-r border-black py-1 px-2 text-[10px] font-semibold text-center">NAME</th>
-              {showPositions && (
-                <th className="border-r border-black py-1 px-2 text-[10px] font-semibold text-center uppercase leading-tight bg-slate-100 text-slate-500 print:bg-transparent print:text-black">POSITION</th>
+              {showId && (
+                <th className="border-r border-black py-1 px-1 text-[9px] font-semibold text-center uppercase leading-tight bg-slate-100 text-slate-500 print:bg-transparent print:text-black">ID</th>
               )}
-              <th className="border-r border-black py-1 px-2 text-[10px] font-semibold text-center">PHONE</th>
-              <th className="w-[8.5%] border-r border-black py-1 px-2 text-[10px] font-semibold text-center">TIME IN</th>
-              <th className="w-[8.5%] border-r border-black py-1 px-2 text-[10px] font-semibold text-center leading-tight">START<br />WEIGHT</th>
-              <th className="w-[8.5%] border-r border-black py-1 px-2 text-[10px] font-semibold text-center leading-tight">LAP 1 START<br />TIME</th>
-              <th className="w-[8.5%] border-r border-black py-1 px-2 text-[10px] font-semibold text-center leading-tight">LAP 1 END<br />TIME</th>
-              <th className="w-[8.5%] border-r border-black py-1 px-2 text-[10px] font-semibold text-center leading-tight">LAP 2 START<br />TIME</th>
-              <th className="w-[8.5%] border-r border-black py-1 px-2 text-[10px] font-semibold text-center leading-tight">LAP 2 END<br />TIME</th>
-              <th className="w-[8.5%] border-r border-black py-1 px-2 text-[10px] font-semibold text-center leading-tight">END<br />WEIGHT</th>
-              <th className={`py-1 px-2 text-[10px] font-semibold text-center ${showCalcHours ? 'w-[8.5%] border-r border-black' : 'w-[8.5%]'}`}>TIME OUT</th>
+              <th className="border-r border-black py-1 px-1 text-[10px] font-semibold text-center">NAME</th>
+              {showStatus && (
+                <th className="border-r border-black py-1 px-1 text-[9px] font-semibold text-center uppercase leading-tight bg-slate-100 text-slate-500 print:bg-transparent print:text-black">STATUS</th>
+              )}
+              {showRole && (
+                <th className="border-r border-black py-1 px-1 text-[9px] font-semibold text-center uppercase leading-tight bg-slate-100 text-slate-500 print:bg-transparent print:text-black">ROLE</th>
+              )}
+              {showPositions && (
+                <th className="border-r border-black py-1 px-1 text-[9px] font-semibold text-center uppercase leading-tight bg-slate-100 text-slate-500 print:bg-transparent print:text-black">POSITION</th>
+              )}
+              {showMedical && (
+                <th className="border-r border-black py-1 px-1 text-[9px] font-semibold text-center uppercase leading-tight bg-slate-100 text-slate-500 print:bg-transparent print:text-black">MEDICAL</th>
+              )}
+              {showTechnical && (
+                <th className="border-r border-black py-1 px-1 text-[9px] font-semibold text-center uppercase leading-tight bg-slate-100 text-slate-500 print:bg-transparent print:text-black">TECHNICAL</th>
+              )}
+              {showPhone && (
+                <th className="border-r border-black py-1 px-1 text-[9px] font-semibold text-center">PHONE</th>
+              )}
+              {showEmail && (
+                <th className="border-r border-black py-1 px-1 text-[9px] font-semibold text-center uppercase leading-tight bg-slate-100 text-slate-500 print:bg-transparent print:text-black">EMAIL</th>
+              )}
+              <th className="border-r border-black py-1 px-1 text-[9px] font-semibold text-center">TIME IN</th>
+              <th className="border-r border-black py-1 px-1 text-[9px] font-semibold text-center leading-tight">START<br />WEIGHT</th>
+              <th className="border-r border-black py-1 px-1 text-[9px] font-semibold text-center leading-tight">LAP 1 START<br />TIME</th>
+              <th className="border-r border-black py-1 px-1 text-[9px] font-semibold text-center leading-tight">LAP 1 END<br />TIME</th>
+              <th className="border-r border-black py-1 px-1 text-[9px] font-semibold text-center leading-tight">LAP 2 START<br />TIME</th>
+              <th className="border-r border-black py-1 px-1 text-[9px] font-semibold text-center leading-tight">LAP 2 END<br />TIME</th>
+              <th className="border-r border-black py-1 px-1 text-[9px] font-semibold text-center leading-tight">END<br />WEIGHT</th>
+              <th className={`py-1 px-1 text-[9px] font-semibold text-center ${showCalcHours ? 'border-r border-black' : ''}`}>TIME OUT</th>
               {showCalcHours && (
-                <th className="w-[6%] py-1 px-2 text-[10px] font-semibold text-center leading-tight text-slate-500 bg-slate-100 print:bg-transparent print:text-black">CALC.<br />HOURS</th>
+                <th className="py-1 px-1 text-[9px] font-semibold text-center leading-tight text-slate-500 bg-slate-100 print:bg-transparent print:text-black">CALC.<br />HOURS</th>
               )}
             </tr>
           </thead>
@@ -284,9 +392,30 @@ export const ICS211Form = forwardRef<HTMLDivElement, ICS211FormProps>(
 
               return (
                 <tr key={row.id} className={rowClasses}>
+                  {showId && (
+                    <td className="border-r border-black p-1 px-2 bg-slate-50 text-slate-500 italic font-medium print:bg-transparent print:text-black print:not-italic print:font-normal">
+                      <div className="text-[10px] leading-tight break-words select-none pointer-events-none text-center">
+                        {row.memberId ? (idsMap[row.memberId] || '') : ''}
+                      </div>
+                    </td>
+                  )}
                   <td className="border-r border-black p-1 px-2">
                     <EditableCell rowActions={rowActions} onContextMenuEvent={handleCellContextMenu} cell={row.cells.name} onChange={(v) => onUpdateRow(row.id, 'name', v)} highlightChanges={highlightChanges} className="font-medium break-words" />
                   </td>
+                  {showStatus && (
+                    <td className="border-r border-black p-1 px-2 bg-slate-50 text-slate-500 italic font-medium print:bg-transparent print:text-black print:not-italic print:font-normal">
+                      <div className="text-[10px] leading-tight break-words select-none pointer-events-none">
+                        {row.memberId ? (statusMap[row.memberId] || '') : ''}
+                      </div>
+                    </td>
+                  )}
+                  {showRole && (
+                    <td className="border-r border-black p-1 px-2 bg-slate-50 text-slate-500 italic font-medium print:bg-transparent print:text-black print:not-italic print:font-normal">
+                      <div className="text-[10px] leading-tight break-words select-none pointer-events-none">
+                        {row.memberId ? (rolesMap[row.memberId] || '') : ''}
+                      </div>
+                    </td>
+                  )}
                   {showPositions && (
                     <td className="border-r border-black p-1 px-2 bg-slate-50 text-slate-500 italic font-medium print:bg-transparent print:text-black print:not-italic print:font-normal">
                       <div className="text-[10px] leading-tight break-words select-none pointer-events-none">
@@ -294,9 +423,32 @@ export const ICS211Form = forwardRef<HTMLDivElement, ICS211FormProps>(
                       </div>
                     </td>
                   )}
-                  <td className="border-r border-black p-1 px-2">
-                    <EditableCell rowActions={rowActions} onContextMenuEvent={handleCellContextMenu} cell={row.cells.phone} onChange={(v) => onUpdateRow(row.id, 'phone', v)} highlightChanges={highlightChanges} className="break-words" />
-                  </td>
+                  {showMedical && (
+                    <td className="border-r border-black p-1 px-2 bg-slate-50 text-slate-500 italic font-medium print:bg-transparent print:text-black print:not-italic print:font-normal">
+                      <div className="text-[10px] leading-tight break-words select-none pointer-events-none">
+                        {row.memberId ? (medicalMap[row.memberId] || '') : ''}
+                      </div>
+                    </td>
+                  )}
+                  {showTechnical && (
+                    <td className="border-r border-black p-1 px-2 bg-slate-50 text-slate-500 italic font-medium print:bg-transparent print:text-black print:not-italic print:font-normal">
+                      <div className="text-[10px] leading-tight break-words select-none pointer-events-none">
+                        {row.memberId ? (technicalMap[row.memberId] || '') : ''}
+                      </div>
+                    </td>
+                  )}
+                  {showPhone && (
+                    <td className="border-r border-black p-1 px-2 text-center">
+                      <EditableCell rowActions={rowActions} onContextMenuEvent={handleCellContextMenu} cell={row.cells.phone} onChange={(v) => onUpdateRow(row.id, 'phone', v)} highlightChanges={highlightChanges} className="text-[10px] leading-tight break-words" />
+                    </td>
+                  )}
+                  {showEmail && (
+                    <td className="border-r border-black p-1 px-1 bg-slate-50 text-slate-500 italic font-medium print:bg-transparent print:text-black print:not-italic print:font-normal">
+                      <div className="text-[9px] leading-tight break-words select-none pointer-events-none text-center">
+                        {row.memberId ? (emailMap[row.memberId] || '') : ''}
+                      </div>
+                    </td>
+                  )}
                   <td className="border-r border-black p-1 text-center">
                     <EditableCell rowActions={rowActions} onContextMenuEvent={handleCellContextMenu} cell={row.cells.timeIn} onChange={(v) => onUpdateRow(row.id, 'timeIn', v)} highlightChanges={highlightChanges} />
                   </td>
@@ -333,7 +485,7 @@ export const ICS211Form = forwardRef<HTMLDivElement, ICS211FormProps>(
 
           <tfoot className="table-footer-group">
             <tr>
-              <td colSpan={(showCalcHours ? 11 : 10) + (showPositions ? 1 : 0)} className="p-0 border-0">
+              <td colSpan={9 + extraColsCount + (showCalcHours ? 1 : 0)} className="p-0 border-0">
                 <div className="grid grid-cols-4 border-t-2 border-black mt-0">
                   <div className="col-span-1 border-r border-black py-0.5 px-2 flex flex-col justify-center items-start">
                     <div className="font-bold text-sm uppercase leading-tight">ICS 211 FIT</div>

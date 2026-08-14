@@ -12,14 +12,22 @@ interface EditableCellProps {
   successMsg?: string;
 }
 
+const getRawValue = (val: any): string => {
+  if (val === null || val === undefined) return '';
+  if (typeof val === 'string') return val;
+  if (typeof val === 'number') return String(val);
+  if (typeof val === 'object' && val.value !== undefined) return getRawValue(val.value);
+  return '';
+};
+
 export const EditableCell = ({ 
   cell, onChange, highlightChanges, className = '', onContextMenuEvent, rowActions, errorMsg, successMsg
 }: EditableCellProps) => {
-  const [localValue, setLocalValue] = useState(cell.value);
+  const [localValue, setLocalValue] = useState(() => getRawValue(cell?.value));
 
   useEffect(() => {
-    setLocalValue(cell.value);
-  }, [cell.value]);
+    setLocalValue(getRawValue(cell?.value));
+  }, [cell?.value]);
 
   const handleBlur = (e: React.FocusEvent<HTMLDivElement>) => {
     const text = e.target.innerText;

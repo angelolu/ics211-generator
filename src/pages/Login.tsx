@@ -86,7 +86,7 @@ export function Login() {
             fontSize: '1.75rem', fontWeight: 800, color: 'white',
             letterSpacing: '-0.02em', marginBottom: 6,
           }}>
-            ICS-211 Generator
+            ICS 211 Generator
           </h1>
           <p style={{ fontSize: '0.875rem', color: 'rgba(255,255,255,0.5)' }}>
             Connect to D4H to pull activity and roster info

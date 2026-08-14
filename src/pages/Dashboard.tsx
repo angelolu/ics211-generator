@@ -168,7 +168,7 @@ export function Dashboard() {
                   {teamTitle}
                 </div>
                 <div style={{ fontSize: '0.7rem', color: 'rgba(220,195,148,0.7)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-                  ICS-211 Roster Generator
+                  ICS 211 Roster Generator
                 </div>
               </div>
             </div>
