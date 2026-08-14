@@ -1,60 +1,16 @@
-import { forwardRef, useEffect, useState } from 'react';
-import type { FormHeaderData, FormRowData, FormStateData } from '../hooks/useFormState';
+import { forwardRef } from 'react';
+import type { BaseFormProps } from '../types/form';
+import type { FormRowData } from '../hooks/useFormState';
 import { calculateHours } from '../utils/time';
 import { EditableCell } from './EditableCell';
+import { ContextMenuOverlay } from './ContextMenuOverlay';
+import { useContextMenu } from '../hooks/useContextMenu';
 
-interface ICS211FormProps {
-  formState: FormStateData;
-  highlightChanges: boolean;
-  activityType?: 'exercise' | 'event' | 'incident';
-  showPhone?: boolean;
-  showEmail?: boolean;
-  emailMap?: Record<number, string>;
-  showCalcHours?: boolean;
-  showId?: boolean;
-  idsMap?: Record<number, string>;
-  showStatus?: boolean;
-  statusMap?: Record<number, string>;
-  showRole?: boolean;
-  rolesMap?: Record<number, string>;
-  showPositions?: boolean;
-  positionsMap?: Record<number, string>;
-  showMedical?: boolean;
-  medicalMap?: Record<number, string>;
-  showTechnical?: boolean;
-  technicalMap?: Record<number, string>;
-  onUpdateHeader: (key: keyof FormHeaderData, value: string) => void;
-  onUpdateRow: (rowId: string, colKey: keyof FormRowData['cells'], value: string) => void;
-  onRemoveRow?: (rowId: string) => void;
-  onRestoreRow?: (rowId: string) => void;
-}
-
-export const ICS211BForm = forwardRef<HTMLDivElement, ICS211FormProps>(
+export const ICS211BForm = forwardRef<HTMLDivElement, BaseFormProps>(
   ({ formState, highlightChanges, activityType = 'incident', showPhone = false, showEmail = false, emailMap = {}, showCalcHours = false, showId = false, idsMap = {}, showStatus = false, statusMap = {}, showRole = false, rolesMap = {}, showPositions = false, positionsMap = {}, showMedical = false, medicalMap = {}, showTechnical = false, technicalMap = {}, onUpdateHeader, onUpdateRow, onRemoveRow, onRestoreRow }, ref) => {
     const typeLabel = activityType === 'exercise' ? 'EXERCISE' : activityType === 'event' ? 'EVENT' : 'INCIDENT';
 
-    const [contextMenu, setContextMenu] = useState<{ x: number, y: number, actions: { label: string, onClick?: () => void, danger?: boolean, isInfo?: boolean, isError?: boolean, isSuccess?: boolean }[] } | null>(null);
-
-    useEffect(() => {
-      const closeMenu = () => setContextMenu(null);
-      window.addEventListener('click', closeMenu);
-      window.addEventListener('contextmenu', closeMenu, { capture: true });
-      return () => {
-        window.removeEventListener('click', closeMenu);
-        window.removeEventListener('contextmenu', closeMenu, { capture: true });
-      };
-    }, []);
-
-    const handleCellContextMenu = (e: React.MouseEvent, actions: { label: string, onClick?: () => void, danger?: boolean, isInfo?: boolean, isError?: boolean, isSuccess?: boolean }[]) => {
-      setContextMenu({
-        x: e.clientX,
-        y: e.clientY,
-        actions
-      });
-    };
-
-    // Tweak this value to adjust how far left the custom menu spawns relative to the cursor
-    const CONTEXT_MENU_X_OFFSET = 150;
+    const { contextMenu, setContextMenu, handleCellContextMenu } = useContextMenu();
 
     const extraColsCount =
       (showId ? 1 : 0) +
@@ -111,41 +67,15 @@ export const ICS211BForm = forwardRef<HTMLDivElement, ICS211FormProps>(
     const nameWidth = `${nameWidthVal.toFixed(1)}%`;
     const addlWidth = `${addlWidthVal.toFixed(1)}%`;
 
+    const buildRowActions = (row: FormRowData) => ({
+      isDeleted: row.isDeleted,
+      removeFn: onRemoveRow ? () => onRemoveRow(row.id) : undefined,
+      restoreFn: onRestoreRow ? () => onRestoreRow(row.id) : undefined,
+    });
+
     return (
       <div ref={ref} className="bg-white p-8 font-sans text-black max-w-[11in] mx-auto print:p-0 print:m-0 relative">
-        {contextMenu && (
-          <div
-            className="fixed z-[100] bg-slate-800 text-white text-xs font-semibold py-1 rounded-lg shadow-xl print:hidden border border-slate-600 flex flex-col min-w-[120px] max-w-[200px]"
-            style={{ top: Math.max(10, contextMenu.y - 10), left: Math.min(window.innerWidth - 220, Math.max(10, contextMenu.x - CONTEXT_MENU_X_OFFSET)) }}
-            onMouseDown={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-            }}
-          >
-            {contextMenu.actions.map((action, i) => {
-              if (action.isError || action.isSuccess || action.isInfo) {
-                return (
-                  <div key={i} className={`px-3 py-2 text-[11px] font-medium border-b border-slate-700 pb-2 mb-1 pointer-events-none whitespace-pre-wrap break-words ${action.isError ? 'text-red-400' : action.isSuccess ? 'text-emerald-400' : 'text-slate-300'}`}>
-                    {action.label}
-                  </div>
-                );
-              }
-              return (
-                <div
-                  key={i}
-                  className={`px-3 py-2 cursor-pointer transition-colors flex items-center whitespace-pre-wrap break-words ${action.danger ? 'text-red-400 hover:bg-red-900/30' : 'hover:bg-slate-700'}`}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    action.onClick && action.onClick();
-                    setContextMenu(null);
-                  }}
-                >
-                  {action.label}
-                </div>
-              );
-            })}
-          </div>
-        )}
+        <ContextMenuOverlay contextMenu={contextMenu} setContextMenu={setContextMenu} />
 
         <style type="text/css" media="print">
           {`
@@ -249,12 +179,7 @@ export const ICS211BForm = forwardRef<HTMLDivElement, ICS211FormProps>(
               if (row.isDeleted && !highlightChanges) return null;
               const isDeleted = highlightChanges && row.isDeleted;
               const rowClasses = `page-break-inside-avoid border-b border-black last:border-b-0 h-8 ${isDeleted ? 'bg-red-100 text-red-900 line-through print:hidden' : ''}`;
-
-              const rowActions = {
-                isDeleted: row.isDeleted,
-                removeFn: onRemoveRow ? () => onRemoveRow(row.id) : undefined,
-                restoreFn: onRestoreRow ? () => onRestoreRow(row.id) : undefined
-              };
+              const rowActions = buildRowActions(row);
 
               return (
                 <tr key={row.id} className={rowClasses}>

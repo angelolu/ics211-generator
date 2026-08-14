@@ -1,7 +1,8 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { fetchAndCacheTeamSubdomain, formatActivityLocation, getActivity, getAttendees, getMemberDetails, getMemberQualifications } from '../api/d4h';
 import { format } from 'date-fns';
 import { calculateHours } from '../utils/time';
+import { buildMemberMaps, type MemberDetailMaps } from '../utils/memberMaps';
 
 const formatD4HTime = (isoString?: string | null): string => {
   if (!isoString) return '';
@@ -51,16 +52,6 @@ const isEventTodayOrFuture = (isoDate?: string | null): boolean => {
   const now = new Date();
   const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
   return d.getTime() >= todayStart;
-};
-
-const extractEmail = (email: any): string => {
-  if (!email) return '';
-  if (typeof email === 'string') return email;
-  if (typeof email === 'object') {
-    if (typeof email.value === 'string') return email.value;
-    if (typeof email.email === 'string') return email.email;
-  }
-  return '';
 };
 
 export interface CellState {
@@ -118,6 +109,8 @@ export interface FormStateData {
   periods?: FormPeriodData[];
 }
 
+// ── Helpers ────────────────────────────────────────────────
+
 const createCell = (value: string): CellState => ({
   value,
   isEditedLocally: false,
@@ -144,8 +137,66 @@ const generateBlankRow = (id: string): FormRowData => ({
   }
 });
 
+/** Generate a unique blank-row ID using crypto.randomUUID */
+const blankRowId = (prefix = '') => `${prefix}blank_${crypto.randomUUID()}`;
+
+/** Build a FormRowData from an attendee + member detail lookup */
+const buildAttendeeRow = (
+  att: any,
+  memberData: any[],
+  isTodayOrFuture: boolean,
+  exerciseFallback: any,
+  idPrefix: string,
+): FormRowData => {
+  const memberDetail = memberData.find((m: any) => m.id === att.member.id);
+  const phone = memberDetail?.mobile?.phone || memberDetail?.home?.phone || memberDetail?.work?.phone || '';
+  const startIso = att.startsAt || exerciseFallback?.startsAt;
+  const endIso = att.endsAt || exerciseFallback?.endsAt;
+  const timeInStr = isTodayOrFuture ? '' : formatD4HTime(startIso);
+  const timeOutStr = isTodayOrFuture ? '' : formatD4HTime(endIso);
+  const hoursStr = isTodayOrFuture ? '' : calculateD4HHours(startIso, endIso, timeInStr, timeOutStr, att.hours, att.duration);
+
+  return {
+    id: `${idPrefix}member_${att.member.id}`,
+    memberId: att.member.id,
+    cells: {
+      name: createCell(memberDetail?.name || 'Unknown Member'),
+      phone: createCell(phone),
+      timeIn: createCell(timeInStr),
+      weightStart: createCell(''),
+      lap1Start: createCell(''),
+      lap1End: createCell(''),
+      lap2Start: createCell(''),
+      lap2End: createCell(''),
+      weightEnd: createCell(''),
+      timeOut: createCell(timeOutStr),
+      tCard: createCell(''),
+      hours: createCell(hoursStr),
+      additionalInfo: createCell(''),
+      agencyTeam: createCell(''),
+    }
+  };
+};
+
+// ── Combined member-maps state ─────────────────────────────
+
+interface AllMemberMaps extends MemberDetailMaps {
+  medicalMap: Record<number, string>;
+  technicalMap: Record<number, string>;
+}
+
+const EMPTY_MAPS: AllMemberMaps = {
+  medicalMap: {}, technicalMap: {},
+  positionsMap: {}, idsMap: {}, statusMap: {}, rolesMap: {}, emailMap: {},
+};
+
+// ── Hook ───────────────────────────────────────────────────
+
 export function useFormState(exerciseId: number | string | undefined, contextId: string | null, exercise: any | undefined, teamTitle: string) {
   const storageKey = `d4h_form_${exerciseId}`;
+  
+  // Parse contextId once — all API calls use this number
+  const contextIdNum = contextId ? parseInt(contextId, 10) : NaN;
   
   const exerciseRef = useRef(exercise);
   exerciseRef.current = exercise;
@@ -157,13 +208,7 @@ export function useFormState(exerciseId: number | string | undefined, contextId:
   const [isLoading, setIsLoading] = useState(true);
   const [isPulling, setIsPulling] = useState(false);
   const [hasPendingChanges, setHasPendingChanges] = useState(false);
-  const [medicalMap, setMedicalMap] = useState<Record<number, string>>({});
-  const [technicalMap, setTechnicalMap] = useState<Record<number, string>>({});
-  const [positionsMap, setPositionsMap] = useState<Record<number, string>>({});
-  const [idsMap, setIdsMap] = useState<Record<number, string>>({});
-  const [statusMap, setStatusMap] = useState<Record<number, string>>({});
-  const [rolesMap, setRolesMap] = useState<Record<number, string>>({});
-  const [emailMap, setEmailMap] = useState<Record<number, string>>({});
+  const [memberMaps, setMemberMaps] = useState<AllMemberMaps>(EMPTY_MAPS);
   const [highlightChanges, setHighlightChanges] = useState(() => {
     return localStorage.getItem('d4h_highlight_changes') === 'true';
   });
@@ -171,197 +216,196 @@ export function useFormState(exerciseId: number | string | undefined, contextId:
   useEffect(() => {
     localStorage.setItem('d4h_highlight_changes', String(highlightChanges));
   }, [highlightChanges]);
-  
-  const hasLocalChanges = formState ? (
-    Object.values(formState.headers).some(c => c.isEditedLocally) ||
-    formState.rows.some(r => Object.values(r.cells).some(c => c.isEditedLocally) || r.isDeleted) ||
-    (formState.periods ? formState.periods.some(p =>
-      Object.values(p.headers).some(c => c.isEditedLocally) ||
-      p.rows.some(r => Object.values(r.cells).some(c => c.isEditedLocally) || r.isDeleted)
-    ) : false)
-  ) : false;
-    
-  const hasConflicts = formState ? (
-    Object.values(formState.headers).some(c => !!c.conflictValue) ||
-    formState.rows.some(r => Object.values(r.cells).some(c => !!c.conflictValue)) ||
-    (formState.periods ? formState.periods.some(p =>
-      Object.values(p.headers).some(c => !!c.conflictValue) ||
-      p.rows.some(r => Object.values(r.cells).some(c => !!c.conflictValue))
-    ) : false)
-  ) : false;
 
-  // Initialize or load state
+  // ── Derived flags (memoized) ──────────────────────────────
+
+  const hasLocalChanges = useMemo(() => {
+    if (!formState) return false;
+    return (
+      Object.values(formState.headers).some(c => c.isEditedLocally) ||
+      formState.rows.some(r => Object.values(r.cells).some(c => c.isEditedLocally) || r.isDeleted) ||
+      (formState.periods ? formState.periods.some(p =>
+        Object.values(p.headers).some(c => c.isEditedLocally) ||
+        p.rows.some(r => Object.values(r.cells).some(c => c.isEditedLocally) || r.isDeleted)
+      ) : false)
+    );
+  }, [formState]);
+    
+  const hasConflicts = useMemo(() => {
+    if (!formState) return false;
+    return (
+      Object.values(formState.headers).some(c => !!c.conflictValue) ||
+      formState.rows.some(r => Object.values(r.cells).some(c => !!c.conflictValue)) ||
+      (formState.periods ? formState.periods.some(p =>
+        Object.values(p.headers).some(c => !!c.conflictValue) ||
+        p.rows.some(r => Object.values(r.cells).some(c => !!c.conflictValue))
+      ) : false)
+    );
+  }, [formState]);
+
+  // ── Initialize or load state ──────────────────────────────
+
   useEffect(() => {
     if (!exerciseId) return;
     const isLocal = typeof exerciseId === 'string' && exerciseId.startsWith('local_');
     const currentEx = exerciseRef.current;
-    if (!isLocal && (!contextId || !currentEx)) return;
+    if (!isLocal && (isNaN(contextIdNum) || !currentEx)) return;
 
     const loadInitialData = async () => {
       try {
         const savedData = localStorage.getItem(storageKey);
         if (savedData) {
           const parsed = JSON.parse(savedData);
-          // Normalize legacy rows to have the new cells
-          if (parsed && parsed.rows) {
-            parsed.rows = parsed.rows.map((r: any) => ({
-              ...r,
-              cells: {
-                ...r.cells,
-                tCard: r.cells.tCard || createCell(''),
-                hours: r.cells.hours || createCell(''),
-                additionalInfo: r.cells.additionalInfo || createCell(''),
-                agencyTeam: r.cells.agencyTeam || createCell('')
-              }
-            }));
-          }
-          if (parsed && parsed.periods) {
-            parsed.periods = parsed.periods.map((p: any) => ({
-              ...p,
-              rows: p.rows.map((r: any) => ({
+
+          // If activity spans multiple days in D4H but the cache is in legacy single-page format, discard stale cache and rebuild fresh
+          const isLegacySinglePageMultiDay = !isLocal && !parsed.periods && currentEx?.startsAt && currentEx?.endsAt &&
+            format(new Date(currentEx.startsAt), 'yyyy-MM-dd') !== format(new Date(currentEx.endsAt), 'yyyy-MM-dd');
+
+          if (isLegacySinglePageMultiDay) {
+            localStorage.removeItem(storageKey);
+          } else {
+            // Normalize legacy rows to have the new cells
+            if (parsed && parsed.rows) {
+              parsed.rows = parsed.rows.map((r: any) => ({
                 ...r,
                 cells: {
                   ...r.cells,
-                  tCard: r.cells?.tCard || createCell(''),
-                  hours: r.cells?.hours || createCell(''),
-                  additionalInfo: r.cells?.additionalInfo || createCell(''),
-                  agencyTeam: r.cells?.agencyTeam || createCell('')
+                  tCard: r.cells.tCard || createCell(''),
+                  hours: r.cells.hours || createCell(''),
+                  additionalInfo: r.cells.additionalInfo || createCell(''),
+                  agencyTeam: r.cells.agencyTeam || createCell('')
                 }
-              }))
-            }));
-          }
-          setFormState(parsed);
-          setIsLoading(false);
-
-          // Even when loading from cache, fetch member info live for D4H rosters
-          if (!isLocal && contextId) {
-            fetchAndCacheTeamSubdomain(contextId);
-            const cachedMemberIds = parsed.periods
-              ? parsed.periods.flatMap((p: any) => p.rows.map((r: any) => r.memberId)).filter((id: any): id is number => typeof id === 'number')
-              : (parsed.rows as FormRowData[]).map(r => r.memberId).filter((id): id is number => typeof id === 'number');
-
-            if (cachedMemberIds.length > 0) {
-              getMemberQualifications(parseInt(contextId!, 10), cachedMemberIds)
-                .then(res => {
-                  setMedicalMap(res.medicalMap);
-                  setTechnicalMap(res.technicalMap);
-                });
-              getMemberDetails(parseInt(contextId!, 10), cachedMemberIds)
-                .then(members => {
-                  const posMap: Record<number, string> = {};
-                  const ids: Record<number, string> = {};
-                  const statuses: Record<number, string> = {};
-                  const roles: Record<number, string> = {};
-                  const emails: Record<number, string> = {};
-                  members.forEach(m => {
-                    if (m.id) {
-                      if (m.position) posMap[m.id] = m.position;
-                      if (m.ref) ids[m.id] = m.ref;
-                      else if (m.idTag) ids[m.id] = m.idTag;
-                      else ids[m.id] = String(m.id);
-                      if (m.customStatus?.title) statuses[m.id] = m.customStatus.title;
-                      else if (m.status) statuses[m.id] = m.status;
-                      if (m.role?.title) roles[m.id] = m.role.title;
-                      if (m.email) emails[m.id] = extractEmail(m.email);
-                    }
-                  });
-                  setPositionsMap(posMap);
-                  setIdsMap(ids);
-                  setStatusMap(statuses);
-                  setRolesMap(roles);
-                  setEmailMap(emails);
-                });
+              }));
+            }
+            if (parsed && parsed.periods) {
+              parsed.periods = parsed.periods.map((p: any) => ({
+                ...p,
+                rows: p.rows.map((r: any) => ({
+                  ...r,
+                  cells: {
+                    ...r.cells,
+                    tCard: r.cells?.tCard || createCell(''),
+                    hours: r.cells?.hours || createCell(''),
+                    additionalInfo: r.cells?.additionalInfo || createCell(''),
+                    agencyTeam: r.cells?.agencyTeam || createCell('')
+                  }
+                }))
+              }));
             }
 
-            // Background check for pending D4H changes
-            const checkPendingChanges = async (currentForm: FormStateData) => {
-              try {
-                const [attData, freshExercise] = await Promise.all([
-                  getAttendees(parseInt(contextId, 10), exerciseId as number),
-                  getActivity(parseInt(contextId, 10), exerciseId as number, exercise?.type),
-                ]);
-                const memberIds = attData.map(a => a.member.id);
-                const memberData = memberIds.length > 0
-                  ? await getMemberDetails(parseInt(contextId, 10), memberIds)
-                  : [];
+            setFormState(parsed);
+            setIsLoading(false);
 
-                let changesFound = false;
+            // Even when loading from cache, fetch member info live for D4H rosters
+            if (!isLocal && !isNaN(contextIdNum)) {
+              fetchAndCacheTeamSubdomain(contextId!);
+              const cachedMemberIds = parsed.periods
+                ? parsed.periods.flatMap((p: any) => p.rows.map((r: any) => r.memberId)).filter((id: any): id is number => typeof id === 'number')
+                : (parsed.rows as FormRowData[]).map(r => r.memberId).filter((id): id is number => typeof id === 'number');
 
-                if (freshExercise) {
-                  const remoteExName = freshExercise.referenceDescription || freshExercise.description || 'Unnamed Exercise';
-                  const remoteDate = freshExercise.startsAt ? format(new Date(freshExercise.startsAt), 'MM/dd/yyyy') : '';
-                  const remoteExNumber = freshExercise.id.toString();
-                  const remoteCheckInLoc = formatActivityLocation(freshExercise);
+              if (cachedMemberIds.length > 0) {
+                getMemberQualifications(contextIdNum, cachedMemberIds)
+                  .then(res => {
+                    setMemberMaps(prev => ({ ...prev, medicalMap: res.medicalMap, technicalMap: res.technicalMap }));
+                  });
+                getMemberDetails(contextIdNum, cachedMemberIds)
+                  .then(members => {
+                    const maps = buildMemberMaps(members);
+                    setMemberMaps(prev => ({ ...prev, ...maps }));
+                  });
+              }
 
-                  if (
-                    (currentForm.headers.exerciseName && currentForm.headers.exerciseName.originalValue !== remoteExName) ||
-                    (currentForm.headers.date && currentForm.headers.date.originalValue !== remoteDate) ||
-                    (currentForm.headers.exerciseNumber && currentForm.headers.exerciseNumber.originalValue !== remoteExNumber) ||
-                    (currentForm.headers.checkInLocation && currentForm.headers.checkInLocation.originalValue !== remoteCheckInLoc)
-                  ) {
-                    changesFound = true;
-                  }
-                }
+              // Background check for pending D4H changes
+              const checkPendingChanges = async (currentForm: FormStateData) => {
+                try {
+                  const [attData, freshExercise] = await Promise.all([
+                    getAttendees(contextIdNum, exerciseId as number),
+                    getActivity(contextIdNum, exerciseId as number, currentEx?.type),
+                  ]);
+                  const memberIds = attData.map(a => a.member.id);
+                  const memberData = memberIds.length > 0
+                    ? await getMemberDetails(contextIdNum, memberIds)
+                    : [];
 
-                if (!changesFound) {
-                  const currentMemberRows = currentForm.rows.filter(r => typeof r.memberId === 'number' && !r.isDeleted);
-                  const currentMemberIds = new Set(currentMemberRows.map(r => r.memberId));
+                  let changesFound = false;
 
-                  if (currentMemberRows.length !== attData.length) {
-                    changesFound = true;
-                  } else {
-                    for (const att of attData) {
-                      if (!currentMemberIds.has(att.member.id)) {
-                        changesFound = true;
-                        break;
-                      }
+                  if (freshExercise) {
+                    const remoteExName = freshExercise.referenceDescription || freshExercise.description || 'Unnamed Exercise';
+                    const remoteDate = freshExercise.startsAt ? format(new Date(freshExercise.startsAt), 'MM/dd/yyyy') : '';
+                    const remoteExNumber = freshExercise.id.toString();
+                    const remoteCheckInLoc = formatActivityLocation(freshExercise);
+
+                    if (
+                      (currentForm.headers.exerciseName && currentForm.headers.exerciseName.originalValue !== remoteExName) ||
+                      (currentForm.headers.date && currentForm.headers.date.originalValue !== remoteDate) ||
+                      (currentForm.headers.exerciseNumber && currentForm.headers.exerciseNumber.originalValue !== remoteExNumber) ||
+                      (currentForm.headers.checkInLocation && currentForm.headers.checkInLocation.originalValue !== remoteCheckInLoc)
+                    ) {
+                      changesFound = true;
                     }
                   }
 
                   if (!changesFound) {
-                    for (const att of attData) {
-                      const row = currentMemberRows.find(r => r.memberId === att.member.id);
-                      if (!row) {
-                        changesFound = true;
-                        break;
+                    const currentMemberRows = currentForm.periods
+                      ? currentForm.periods.flatMap(p => p.rows.filter(r => typeof r.memberId === 'number' && !r.isDeleted))
+                      : currentForm.rows.filter(r => typeof r.memberId === 'number' && !r.isDeleted);
+                    const currentMemberIds = new Set(currentMemberRows.map(r => r.memberId));
+
+                    if (currentMemberRows.length !== attData.length) {
+                      changesFound = true;
+                    } else {
+                      for (const att of attData) {
+                        if (!currentMemberIds.has(att.member.id)) {
+                          changesFound = true;
+                          break;
+                        }
                       }
+                    }
 
-                      const memberDetail = memberData.find(m => m.id === att.member.id);
-                      const remoteName = memberDetail?.name || 'Unknown Member';
-                      const remotePhone = memberDetail?.mobile?.phone || memberDetail?.home?.phone || memberDetail?.work?.phone || '';
+                    if (!changesFound) {
+                      for (const att of attData) {
+                        const row = currentMemberRows.find(r => r.memberId === att.member.id);
+                        if (!row) {
+                          changesFound = true;
+                          break;
+                        }
 
-                      const startIso = att.startsAt || freshExercise?.startsAt || exercise?.startsAt;
-                      const endIso = att.endsAt || freshExercise?.endsAt || exercise?.endsAt;
-                      const isTodayOrFuture = isEventTodayOrFuture(freshExercise?.startsAt || exercise?.startsAt || startIso);
-                      const remoteTimeIn = isTodayOrFuture ? '' : formatD4HTime(startIso);
-                      const remoteTimeOut = isTodayOrFuture ? '' : formatD4HTime(endIso);
-                      const remoteHours = isTodayOrFuture ? '' : calculateD4HHours(startIso, endIso, remoteTimeIn, remoteTimeOut, att.hours, att.duration);
+                        const memberDetail = memberData.find(m => m.id === att.member.id);
+                        const remoteName = memberDetail?.name || 'Unknown Member';
+                        const remotePhone = memberDetail?.mobile?.phone || memberDetail?.home?.phone || memberDetail?.work?.phone || '';
 
-                      if (
-                        row.cells.name.originalValue !== remoteName ||
-                        row.cells.phone.originalValue !== remotePhone ||
-                        row.cells.timeIn.originalValue !== remoteTimeIn ||
-                        row.cells.timeOut.originalValue !== remoteTimeOut ||
-                        row.cells.hours.originalValue !== remoteHours
-                      ) {
-                        changesFound = true;
-                        break;
+                        const startIso = att.startsAt || freshExercise?.startsAt || currentEx?.startsAt;
+                        const endIso = att.endsAt || freshExercise?.endsAt || currentEx?.endsAt;
+                        const isTodayOrFuture = isEventTodayOrFuture(freshExercise?.startsAt || currentEx?.startsAt || startIso);
+                        const remoteTimeIn = isTodayOrFuture ? '' : formatD4HTime(startIso);
+                        const remoteTimeOut = isTodayOrFuture ? '' : formatD4HTime(endIso);
+                        const remoteHours = isTodayOrFuture ? '' : calculateD4HHours(startIso, endIso, remoteTimeIn, remoteTimeOut, att.hours, att.duration);
+
+                        if (
+                          row.cells.name.originalValue !== remoteName ||
+                          row.cells.phone.originalValue !== remotePhone ||
+                          row.cells.timeIn.originalValue !== remoteTimeIn ||
+                          row.cells.timeOut.originalValue !== remoteTimeOut ||
+                          row.cells.hours.originalValue !== remoteHours
+                        ) {
+                          changesFound = true;
+                          break;
+                        }
                       }
                     }
                   }
+
+                  setHasPendingChanges(changesFound);
+                } catch (e) {
+                  console.error('[Background Check] Error checking D4H changes:', e);
                 }
+              };
 
-                setHasPendingChanges(changesFound);
-              } catch (e) {
-                console.error('[Background Check] Error checking D4H changes:', e);
-              }
-            };
-
-            checkPendingChanges(parsed);
+              checkPendingChanges(parsed);
+            }
+            return;
           }
-          return;
         }
-
 
         if (isLocal) {
           const headers: FormHeaderData = {
@@ -377,60 +421,56 @@ export function useFormState(exerciseId: number | string | undefined, contextId:
           };
           const rows: FormRowData[] = [];
           for (let i = 0; i < 15; i++) {
-            rows.push(generateBlankRow(`blank_${Date.now()}_${i}`));
+            rows.push(generateBlankRow(blankRowId()));
           }
           const newState: FormStateData = { headers, rows };
           setFormState(newState);
           localStorage.setItem(storageKey, JSON.stringify(newState));
+
+          // Ensure this roster is present in fitnessqual_local_rosters
+          try {
+            const savedList = localStorage.getItem('fitnessqual_local_rosters');
+            const rosters = savedList ? JSON.parse(savedList) : [];
+            if (!rosters.some((r: { id: string }) => r.id === exerciseId)) {
+              rosters.unshift({
+                id: exerciseId,
+                title: headers.exerciseName.value,
+                createdAt: new Date().toISOString(),
+                type: 'local',
+              });
+              localStorage.setItem('fitnessqual_local_rosters', JSON.stringify(rosters));
+            }
+          } catch (e) {
+            console.error('Failed to sync local roster list', e);
+          }
+
           setIsLoading(false);
           return;
         }
 
         // Build from scratch (D4H)
-        const attData = await getAttendees(parseInt(contextId!, 10), exerciseId as number);
+        const attData = await getAttendees(contextIdNum, exerciseId as number);
         const memberIds = Array.from(new Set(attData.map(a => a.member.id)));
         const [memberData, qualRes] = await Promise.all([
-          memberIds.length > 0 ? getMemberDetails(parseInt(contextId!, 10), memberIds) : Promise.resolve([]),
-          memberIds.length > 0 ? getMemberQualifications(parseInt(contextId!, 10), memberIds) : Promise.resolve({ medicalMap: {}, technicalMap: {} }),
+          memberIds.length > 0 ? getMemberDetails(contextIdNum, memberIds) : Promise.resolve([]),
+          memberIds.length > 0 ? getMemberQualifications(contextIdNum, memberIds) : Promise.resolve({ medicalMap: {}, technicalMap: {} }),
         ]);
-        setMedicalMap(qualRes.medicalMap);
-        setTechnicalMap(qualRes.technicalMap);
-        const posMap: Record<number, string> = {};
-        const ids: Record<number, string> = {};
-        const statuses: Record<number, string> = {};
-        const roles: Record<number, string> = {};
-        const emails: Record<number, string> = {};
-        memberData.forEach(m => {
-          if (m.id) {
-            if (m.position) posMap[m.id] = m.position;
-            if (m.ref) ids[m.id] = m.ref;
-            else if (m.idTag) ids[m.id] = m.idTag;
-            else ids[m.id] = String(m.id);
-            if (m.customStatus?.title) statuses[m.id] = m.customStatus.title;
-            else if (m.status) statuses[m.id] = m.status;
-            if (m.role?.title) roles[m.id] = m.role.title;
-            if (m.email) emails[m.id] = extractEmail(m.email);
-          }
+
+        const maps = buildMemberMaps(memberData, attData);
+        setMemberMaps({
+          medicalMap: qualRes.medicalMap,
+          technicalMap: qualRes.technicalMap,
+          ...maps,
         });
-        attData.forEach(att => {
-          if (att.member?.id && att.role?.title) {
-            roles[att.member.id] = att.role.title;
-          }
-        });
-        setPositionsMap(posMap);
-        setIdsMap(ids);
-        setStatusMap(statuses);
-        setRolesMap(roles);
-        setEmailMap(emails);
         
-        const exerciseDate = exercise.startsAt ? format(new Date(exercise.startsAt), 'MM/dd/yyyy') : '';
-        const exName = exercise.referenceDescription || exercise.description || 'Unnamed Exercise';
-        const checkInLoc = formatActivityLocation(exercise);
+        const exerciseDate = currentEx.startsAt ? format(new Date(currentEx.startsAt), 'MM/dd/yyyy') : '';
+        const exName = currentEx.referenceDescription || currentEx.description || 'Unnamed Exercise';
+        const checkInLoc = formatActivityLocation(currentEx);
 
         const baseHeaders: FormHeaderData = {
           exerciseName: createCell(exName),
           date: createCell(exerciseDate),
-          exerciseNumber: createCell(exercise.id.toString()),
+          exerciseNumber: createCell(currentEx.id.toString()),
           checkInLocation: createCell(checkInLoc),
           agencyTeam: createCell(teamTitle),
           liaisonName: createCell(''),
@@ -447,9 +487,9 @@ export function useFormState(exerciseId: number | string | undefined, contextId:
           }
         });
 
-        if (uniqueDates.size <= 1 && exercise?.startsAt && exercise?.endsAt) {
-          const startD = new Date(exercise.startsAt);
-          const endD = new Date(exercise.endsAt);
+        if (uniqueDates.size <= 1 && currentEx?.startsAt && currentEx?.endsAt) {
+          const startD = new Date(currentEx.startsAt);
+          const endD = new Date(currentEx.endsAt);
           const startDay = format(startD, 'yyyy-MM-dd');
           const endDay = format(endD, 'yyyy-MM-dd');
           if (startDay !== endDay) {
@@ -479,46 +519,18 @@ export function useFormState(exerciseId: number | string | undefined, contextId:
             };
 
             const periodAttendees = attData.filter(a => {
-              const aDate = a.startsAt ? format(new Date(a.startsAt), 'yyyy-MM-dd') : format(new Date(exercise.startsAt), 'yyyy-MM-dd');
+              const aDate = a.startsAt ? format(new Date(a.startsAt), 'yyyy-MM-dd') : format(new Date(currentEx.startsAt), 'yyyy-MM-dd');
               return aDate === dateStr;
             });
 
-            const periodRows: FormRowData[] = periodAttendees.map(att => {
-              const memberDetail = memberData.find(m => m.id === att.member.id);
-              const phone = memberDetail?.mobile?.phone || memberDetail?.home?.phone || memberDetail?.work?.phone || '';
-
-              const startIso = att.startsAt || exercise?.startsAt;
-              const endIso = att.endsAt || exercise?.endsAt;
-              const isTodayOrFuture = isEventTodayOrFuture(startIso);
-              const timeInStr = isTodayOrFuture ? '' : formatD4HTime(startIso);
-              const timeOutStr = isTodayOrFuture ? '' : formatD4HTime(endIso);
-              const hoursStr = isTodayOrFuture ? '' : calculateD4HHours(startIso, endIso, timeInStr, timeOutStr, att.hours, att.duration);
-
-              return {
-                id: `p${periodIdx}_member_${att.member.id}`,
-                memberId: att.member.id,
-                cells: {
-                  name: createCell(memberDetail?.name || 'Unknown Member'),
-                  phone: createCell(phone),
-                  timeIn: createCell(timeInStr),
-                  weightStart: createCell(''),
-                  lap1Start: createCell(''),
-                  lap1End: createCell(''),
-                  lap2Start: createCell(''),
-                  lap2End: createCell(''),
-                  weightEnd: createCell(''),
-                  timeOut: createCell(timeOutStr),
-                  tCard: createCell(''),
-                  hours: createCell(hoursStr),
-                  additionalInfo: createCell(''),
-                  agencyTeam: createCell(''),
-                }
-              };
-            });
+            const isFuture = isEventTodayOrFuture(dateStr + 'T00:00:00');
+            const periodRows: FormRowData[] = periodAttendees.map(att =>
+              buildAttendeeRow(att, memberData, isFuture, currentEx, `p${periodIdx}_`)
+            );
 
             // 5 blank rows per period
             for (let i = 0; i < 5; i++) {
-              periodRows.push(generateBlankRow(`blank_p${periodIdx}_${Date.now()}_${i}`));
+              periodRows.push(generateBlankRow(blankRowId(`p${periodIdx}_`)));
             }
 
             return {
@@ -534,42 +546,14 @@ export function useFormState(exerciseId: number | string | undefined, contextId:
           finalRows = periods[0].rows;
         } else {
           // Single period
-          finalRows = attData.map(att => {
-            const memberDetail = memberData.find(m => m.id === att.member.id);
-            const phone = memberDetail?.mobile?.phone || memberDetail?.home?.phone || memberDetail?.work?.phone || '';
-
-            const startIso = att.startsAt || exercise?.startsAt;
-            const endIso = att.endsAt || exercise?.endsAt;
-            const isTodayOrFuture = isEventTodayOrFuture(exercise?.startsAt || startIso);
-            const timeInStr = isTodayOrFuture ? '' : formatD4HTime(startIso);
-            const timeOutStr = isTodayOrFuture ? '' : formatD4HTime(endIso);
-            const hoursStr = isTodayOrFuture ? '' : calculateD4HHours(startIso, endIso, timeInStr, timeOutStr, att.hours, att.duration);
-
-            return {
-              id: `member_${att.member.id}`,
-              memberId: att.member.id,
-              cells: {
-                name: createCell(memberDetail?.name || 'Unknown Member'),
-                phone: createCell(phone),
-                timeIn: createCell(timeInStr),
-                weightStart: createCell(''),
-                lap1Start: createCell(''),
-                lap1End: createCell(''),
-                lap2Start: createCell(''),
-                lap2End: createCell(''),
-                weightEnd: createCell(''),
-                timeOut: createCell(timeOutStr),
-                tCard: createCell(''),
-                hours: createCell(hoursStr),
-                additionalInfo: createCell(''),
-                agencyTeam: createCell(''),
-              }
-            };
-          });
+          const isFuture = isEventTodayOrFuture(currentEx?.startsAt);
+          finalRows = attData.map(att =>
+            buildAttendeeRow(att, memberData, isFuture, currentEx, '')
+          );
 
           // Add 5 blank rows initially
           for (let i = 0; i < 5; i++) {
-            finalRows.push(generateBlankRow(`blank_${Date.now()}_${i}`));
+            finalRows.push(generateBlankRow(blankRowId()));
           }
         }
 
@@ -584,7 +568,7 @@ export function useFormState(exerciseId: number | string | undefined, contextId:
     };
 
     loadInitialData();
-  }, [exerciseId, contextId, storageKey]);
+  }, [exerciseId, contextIdNum, storageKey]);
 
   // Save to local storage whenever formState changes (avoid redundant writes)
   useEffect(() => {
@@ -593,9 +577,37 @@ export function useFormState(exerciseId: number | string | undefined, contextId:
       if (json !== lastSavedJsonRef.current) {
         lastSavedJsonRef.current = json;
         localStorage.setItem(storageKey, json);
+
+        // If local roster, keep title in fitnessqual_local_rosters updated
+        if (typeof exerciseId === 'string' && exerciseId.startsWith('local_')) {
+          try {
+            const savedList = localStorage.getItem('fitnessqual_local_rosters');
+            if (savedList) {
+              const rosters: Array<{ id: string; title: string; createdAt: string; type: string }> = JSON.parse(savedList);
+              const currentTitle = formState.headers?.exerciseName?.value;
+              if (currentTitle) {
+                let updated = false;
+                const newRosters = rosters.map(r => {
+                  if (r.id === exerciseId && r.title !== currentTitle) {
+                    updated = true;
+                    return { ...r, title: currentTitle };
+                  }
+                  return r;
+                });
+                if (updated) {
+                  localStorage.setItem('fitnessqual_local_rosters', JSON.stringify(newRosters));
+                }
+              }
+            }
+          } catch (e) {
+            console.error('Failed to sync local roster title', e);
+          }
+        }
       }
     }
-  }, [formState, storageKey]);
+  }, [formState, storageKey, exerciseId]);
+
+  // ── Mutation helpers ──────────────────────────────────────
 
   const updateHeaderCell = (key: keyof FormHeaderData, value: string, periodIndex?: number) => {
     setFormState(prev => {
@@ -621,26 +633,26 @@ export function useFormState(exerciseId: number | string | undefined, contextId:
         });
       }
 
-      const cell = prev.headers[key];
-      const newTopHeaders = {
-        ...prev.headers,
-        [key]: {
-          ...cell,
-          value,
-          isEditedLocally: value !== cell.originalValue,
-          conflictValue: cell.conflictValue && value === cell.conflictValue ? undefined : cell.conflictValue
-        }
-      };
+      // BUG FIX: Only update top-level headers when no period is targeted
+      if (periodIndex === undefined) {
+        const cell = prev.headers[key];
+        const newTopHeaders = {
+          ...prev.headers,
+          [key]: {
+            ...cell,
+            value,
+            isEditedLocally: value !== cell.originalValue,
+            conflictValue: cell.conflictValue && value === cell.conflictValue ? undefined : cell.conflictValue
+          }
+        };
+        return { ...prev, headers: newTopHeaders, periods: newPeriods };
+      }
 
-      return {
-        ...prev,
-        headers: newTopHeaders,
-        periods: newPeriods
-      };
+      return { ...prev, periods: newPeriods };
     });
   };
 
-  const updateRowCell = (rowId: string, colKey: keyof FormRowData['cells'], value: string, _periodIndex?: number) => {
+  const updateRowCell = (rowId: string, colKey: keyof FormRowData['cells'], value: string) => {
     setFormState(prev => {
       if (!prev) return prev;
       
@@ -680,7 +692,7 @@ export function useFormState(exerciseId: number | string | undefined, contextId:
           if (idx !== periodIndex) return p;
           const newRows = [...p.rows];
           for (let i = 0; i < count; i++) {
-            newRows.push(generateBlankRow(`blank_p${idx}_${Date.now()}_${i}`));
+            newRows.push(generateBlankRow(blankRowId(`p${idx}_`)));
           }
           return { ...p, rows: newRows };
         });
@@ -691,7 +703,7 @@ export function useFormState(exerciseId: number | string | undefined, contextId:
         const newPeriods = prev.periods.map((p, idx) => {
           const newRows = [...p.rows];
           for (let i = 0; i < count; i++) {
-            newRows.push(generateBlankRow(`blank_p${idx}_${Date.now()}_${i}`));
+            newRows.push(generateBlankRow(blankRowId(`p${idx}_`)));
           }
           return { ...p, rows: newRows };
         });
@@ -700,7 +712,7 @@ export function useFormState(exerciseId: number | string | undefined, contextId:
 
       const newRows = [...prev.rows];
       for (let i = 0; i < count; i++) {
-        newRows.push(generateBlankRow(`blank_${Date.now()}_${i}`));
+        newRows.push(generateBlankRow(blankRowId()));
       }
       return { ...prev, rows: newRows };
     });
@@ -711,7 +723,7 @@ export function useFormState(exerciseId: number | string | undefined, contextId:
       if (!prev) return prev;
       const removeOrMark = (rowList: FormRowData[]) => rowList.filter(r => {
         if (r.id === rowId) {
-          if (r.id.startsWith('blank_')) return false;
+          if (r.id.startsWith('blank_') || r.id.includes('_blank_')) return false;
           return true;
         }
         return true;
@@ -758,7 +770,8 @@ export function useFormState(exerciseId: number | string | undefined, contextId:
           const colKey = k as keyof FormRowData['cells'];
           newCells[colKey] = { ...newCells[colKey], value: newCells[colKey].originalValue, isEditedLocally: false, conflictValue: undefined };
         });
-        return { ...r, cells: newCells };
+        // BUG FIX: Also restore deleted rows so reset truly reverts to D4H state
+        return { ...r, cells: newCells, isDeleted: false };
       });
 
       return {
@@ -825,54 +838,38 @@ export function useFormState(exerciseId: number | string | undefined, contextId:
   };
 
   const pullData = async () => {
-    if (!exerciseId || !contextId) return;
+    if (!exerciseId || isNaN(contextIdNum)) return;
     setIsPulling(true);
     try {
+      // BUG FIX: Use exerciseRef.current to avoid stale closure
+      const currentExercise = exerciseRef.current;
       const [attData, freshExercise] = await Promise.all([
-        getAttendees(parseInt(contextId, 10), exerciseId as number),
-        getActivity(parseInt(contextId, 10), exerciseId as number, exercise?.type),
+        getAttendees(contextIdNum, exerciseId as number),
+        getActivity(contextIdNum, exerciseId as number, currentExercise?.type),
       ]);
       const memberIds = attData.map(a => a.member.id);
       const [memberData, qualRes] = await Promise.all([
-        memberIds.length > 0 ? getMemberDetails(parseInt(contextId, 10), memberIds) : Promise.resolve([]),
-        memberIds.length > 0 ? getMemberQualifications(parseInt(contextId, 10), memberIds) : Promise.resolve({ medicalMap: {}, technicalMap: {} }),
+        memberIds.length > 0 ? getMemberDetails(contextIdNum, memberIds) : Promise.resolve([]),
+        memberIds.length > 0 ? getMemberQualifications(contextIdNum, memberIds) : Promise.resolve({ medicalMap: {}, technicalMap: {} }),
       ]);
-      setMedicalMap(prev => ({ ...prev, ...qualRes.medicalMap }));
-      setTechnicalMap(prev => ({ ...prev, ...qualRes.technicalMap }));
-      const posMap: Record<number, string> = {};
-      const ids: Record<number, string> = {};
-      const statuses: Record<number, string> = {};
-      const roles: Record<number, string> = {};
-      const emails: Record<number, string> = {};
-      memberData.forEach(m => {
-        if (m.id) {
-          if (m.position) posMap[m.id] = m.position;
-          if (m.ref) ids[m.id] = m.ref;
-          else if (m.idTag) ids[m.id] = m.idTag;
-          else ids[m.id] = String(m.id);
-          if (m.customStatus?.title) statuses[m.id] = m.customStatus.title;
-          else if (m.status) statuses[m.id] = m.status;
-          if (m.role?.title) roles[m.id] = m.role.title;
-          if (m.email) emails[m.id] = extractEmail(m.email);
-        }
-      });
-      attData.forEach(att => {
-        if (att.member?.id && att.role?.title) {
-          roles[att.member.id] = att.role.title;
-        }
-      });
-      setPositionsMap(prev => ({ ...prev, ...posMap }));
-      setIdsMap(prev => ({ ...prev, ...ids }));
-      setStatusMap(prev => ({ ...prev, ...statuses }));
-      setRolesMap(prev => ({ ...prev, ...roles }));
-      setEmailMap(prev => ({ ...prev, ...emails }));
+
+      const maps = buildMemberMaps(memberData, attData);
+      setMemberMaps(prev => ({
+        medicalMap: { ...prev.medicalMap, ...qualRes.medicalMap },
+        technicalMap: { ...prev.technicalMap, ...qualRes.technicalMap },
+        positionsMap: { ...prev.positionsMap, ...maps.positionsMap },
+        idsMap: { ...prev.idsMap, ...maps.idsMap },
+        statusMap: { ...prev.statusMap, ...maps.statusMap },
+        rolesMap: { ...prev.rolesMap, ...maps.rolesMap },
+        emailMap: { ...prev.emailMap, ...maps.emailMap },
+      }));
       
       setFormState(prev => {
         if (!prev) return prev;
         
         const newHeaders = { ...prev.headers };
 
-        const isTodayOrFuture = isEventTodayOrFuture(freshExercise?.startsAt || exercise?.startsAt);
+        const isTodayOrFuture = isEventTodayOrFuture(freshExercise?.startsAt || currentExercise?.startsAt);
 
         if (freshExercise) {
           const remoteExName = freshExercise.referenceDescription || freshExercise.description || 'Unnamed Exercise';
@@ -910,7 +907,7 @@ export function useFormState(exerciseId: number | string | undefined, contextId:
           const updatedRows = [...rowsList];
           const attendeesForThisList = filterPeriodDate
             ? attData.filter(a => {
-                const aDate = a.startsAt ? format(new Date(a.startsAt), 'yyyy-MM-dd') : format(new Date(freshExercise?.startsAt || exercise?.startsAt), 'yyyy-MM-dd');
+                const aDate = a.startsAt ? format(new Date(a.startsAt), 'yyyy-MM-dd') : format(new Date(freshExercise?.startsAt || currentExercise?.startsAt), 'yyyy-MM-dd');
                 return aDate === filterPeriodDate;
               })
             : attData;
@@ -920,8 +917,8 @@ export function useFormState(exerciseId: number | string | undefined, contextId:
             const remoteName = memberDetail?.name || 'Unknown Member';
             const remotePhone = memberDetail?.mobile?.phone || memberDetail?.home?.phone || memberDetail?.work?.phone || '';
             
-            const startIso = att.startsAt || freshExercise?.startsAt || exercise?.startsAt;
-            const endIso = att.endsAt || freshExercise?.endsAt || exercise?.endsAt;
+            const startIso = att.startsAt || freshExercise?.startsAt || currentExercise?.startsAt;
+            const endIso = att.endsAt || freshExercise?.endsAt || currentExercise?.endsAt;
             const remoteTimeIn = isTodayOrFuture ? '' : formatD4HTime(startIso);
             const remoteTimeOut = isTodayOrFuture ? '' : formatD4HTime(endIso);
             const remoteHours = isTodayOrFuture ? '' : calculateD4HHours(startIso, endIso, remoteTimeIn, remoteTimeOut, att.hours, att.duration);
@@ -1037,13 +1034,7 @@ export function useFormState(exerciseId: number | string | undefined, contextId:
     hasLocalChanges,
     hasConflicts,
     hasPendingChanges,
-    medicalMap,
-    technicalMap,
-    positionsMap,
-    idsMap,
-    statusMap,
-    rolesMap,
-    emailMap,
+    ...memberMaps,
     highlightChanges,
     setHighlightChanges,
     updateHeaderCell,
@@ -1056,4 +1047,3 @@ export function useFormState(exerciseId: number | string | undefined, contextId:
     restoreRow
   };
 }
-

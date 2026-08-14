@@ -1,4 +1,3 @@
-import * as Dialog from '@radix-ui/react-dialog';
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import * as Label from '@radix-ui/react-label';
 import * as Select from '@radix-ui/react-select';
@@ -30,18 +29,22 @@ import {
   UserCheck,
   Wrench,
 } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Navigate, useLocation, useNavigate, useParams } from 'react-router-dom';
+import { Navigate, useNavigate, useLocation, useParams } from 'react-router-dom';
 import { useReactToPrint } from 'react-to-print';
 import { getD4HActivityUrl } from '../api/d4h';
 import type { Activity } from '../api/d4h';
 import { ICS211AForm } from '../components/ICS211AForm';
 import { ICS211BForm } from '../components/ICS211BForm';
 import { ICS211Form } from '../components/ICS211Form';
+import { ConfirmDialog } from '../components/ConfirmDialog';
 import { useFormState, type FormHeaderData, type FormRowData } from '../hooks/useFormState';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { calculateHours } from '../utils/time';
 import { format } from 'date-fns';
+
+// ── Constants ─────────────────────────────────────────────
 
 const FORM_TYPES = [
   { value: '211a', label: 'ICS 211A' },
@@ -56,6 +59,31 @@ const TYPE_LABELS: Record<string, string> = {
 const TYPE_ICONS: Record<string, string> = {
   exercise: '🏋️', event: '📅', incident: '🚨', local: '💾',
 };
+
+/** Config for optional column toggles (data-driven dropdown) */
+const COLUMN_TOGGLES: { key: keyof ColumnFlags; label: string; icon: LucideIcon; className?: string }[] = [
+  { key: 'showPhone', label: 'Phone numbers', icon: Phone },
+  { key: 'showEmail', label: 'Email', icon: Mail },
+  { key: 'showId', label: 'ID', icon: Hash, className: 'no-print' },
+  { key: 'showStatus', label: 'Status', icon: Shield, className: 'no-print' },
+  { key: 'showRole', label: 'Role', icon: Briefcase, className: 'no-print' },
+  { key: 'showPositions', label: 'Position', icon: UserCheck, className: 'no-print' },
+  { key: 'showMedical', label: 'Medical', icon: HeartPulse, className: 'no-print' },
+  { key: 'showTechnical', label: 'Technical', icon: Wrench, className: 'no-print' },
+];
+
+interface ColumnFlags {
+  showPhone: boolean;
+  showEmail: boolean;
+  showId: boolean;
+  showStatus: boolean;
+  showRole: boolean;
+  showPositions: boolean;
+  showMedical: boolean;
+  showTechnical: boolean;
+}
+
+// ── Component ─────────────────────────────────────────────
 
 export function ExerciseDetails() {
   const { id } = useParams<{ id: string }>();
@@ -79,16 +107,24 @@ export function ExerciseDetails() {
   const [showResetModal, setShowResetModal] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [formType, setFormType] = useState(() => localStorage.getItem(`d4h_form_type_${id}`) || '211a');
-  const [showPhone, setShowPhone] = useState(() => formType === 'fitness');
-  const [showEmail, setShowEmail] = useState(false);
-  const [showId, setShowId] = useState(false);
-  const [showStatus, setShowStatus] = useState(false);
-  const [showRole, setShowRole] = useState(false);
-  const [showPositions, setShowPositions] = useState(false);
-  const [showMedical, setShowMedical] = useState(false);
-  const [showTechnical, setShowTechnical] = useState(false);
   const [showCalcHours, setShowCalcHours] = useState(false);
   const [showValidation, setShowValidation] = useState(false);
+
+  // Single state object for all 8 column-visibility booleans
+  const [columnFlags, setColumnFlags] = useState<ColumnFlags>(() => ({
+    showPhone: (localStorage.getItem(`d4h_form_type_${id}`) || '211a') === 'fitness',
+    showEmail: false,
+    showId: false,
+    showStatus: false,
+    showRole: false,
+    showPositions: false,
+    showMedical: false,
+    showTechnical: false,
+  }));
+
+  const toggleColumn = (key: keyof ColumnFlags) => {
+    setColumnFlags(prev => ({ ...prev, [key]: !prev[key] }));
+  };
 
   useEffect(() => {
     if (id) localStorage.setItem(`d4h_form_type_${id}`, formType);
@@ -97,7 +133,7 @@ export function ExerciseDetails() {
   const handleFormTypeChange = (newType: string) => {
     setFormType(newType);
     if (newType === 'fitness') {
-      setShowPhone(true);
+      setColumnFlags(prev => ({ ...prev, showPhone: true }));
     }
   };
 
@@ -137,8 +173,10 @@ export function ExerciseDetails() {
     }
   };
 
+  // ── CSV Export (deduplicated across form types) ─────────
+
   const handleExportCsv = () => {
-    let extractors: { header: string; getValue: (row: FormRowData) => string }[] = [];
+    const extractors: { header: string; getValue: (row: FormRowData & { _periodLabel?: string }) => string }[] = [];
 
     const escapeCsv = (str: string) => {
       if (!str) return '';
@@ -149,101 +187,33 @@ export function ExerciseDetails() {
       return s;
     };
 
-    if (formType === '211a') {
+    // ── Form-specific prefix columns
+    if (formType !== 'fitness') {
       extractors.push({ header: 'T CARD', getValue: r => r.cells.tCard?.value || '' });
-      if (showId) {
-        extractors.push({ header: 'ID', getValue: r => (r.memberId ? idsMap[r.memberId] || '' : '') });
-      }
-      extractors.push({ header: 'NAME (PERSONNEL) -OR- DESCRIPTION (EQUIPMENT)', getValue: r => r.cells.name?.value || '' });
-      if (showStatus) {
-        extractors.push({ header: 'STATUS', getValue: r => (r.memberId ? statusMap[r.memberId] || '' : '') });
-      }
-      if (showRole) {
-        extractors.push({ header: 'ROLE', getValue: r => (r.memberId ? rolesMap[r.memberId] || '' : '') });
-      }
-      if (showPositions) {
-        extractors.push({ header: 'POSITION', getValue: r => (r.memberId ? positionsMap[r.memberId] || '' : '') });
-      }
-      if (showMedical) {
-        extractors.push({ header: 'MEDICAL', getValue: r => (r.memberId ? medicalMap[r.memberId] || '' : '') });
-      }
-      if (showTechnical) {
-        extractors.push({ header: 'TECHNICAL', getValue: r => (r.memberId ? technicalMap[r.memberId] || '' : '') });
-      }
-      if (showPhone) {
-        extractors.push({ header: 'PHONE', getValue: r => r.cells.phone?.value || '' });
-      }
-      if (showEmail) {
-        extractors.push({ header: 'EMAIL', getValue: r => (r.memberId ? emailMap[r.memberId] || '' : '') });
-      }
-      extractors.push({ header: 'DATE/TIME IN', getValue: r => r.cells.timeIn?.value || '' });
-      extractors.push({ header: 'DATE/TIME OUT', getValue: r => r.cells.timeOut?.value || '' });
-      extractors.push({
-        header: 'HOURS',
-        getValue: r => showCalcHours ? calculateHours(r.cells.timeIn?.value || '', r.cells.timeOut?.value || '') : (r.cells.hours?.value || '')
-      });
-      extractors.push({ header: 'ADDITIONAL INFORMATION', getValue: r => r.cells.additionalInfo?.value || '' });
-    } else if (formType === '211b') {
-      extractors.push({ header: 'T CARD', getValue: r => r.cells.tCard?.value || '' });
-      if (showId) {
-        extractors.push({ header: 'ID', getValue: r => (r.memberId ? idsMap[r.memberId] || '' : '') });
-      }
-      extractors.push({ header: 'NAME (PERSONNEL) -OR- DESCRIPTION (EQUIPMENT)', getValue: r => r.cells.name?.value || '' });
-      if (showStatus) {
-        extractors.push({ header: 'STATUS', getValue: r => (r.memberId ? statusMap[r.memberId] || '' : '') });
-      }
-      if (showRole) {
-        extractors.push({ header: 'ROLE', getValue: r => (r.memberId ? rolesMap[r.memberId] || '' : '') });
-      }
-      if (showPositions) {
-        extractors.push({ header: 'POSITION', getValue: r => (r.memberId ? positionsMap[r.memberId] || '' : '') });
-      }
-      if (showMedical) {
-        extractors.push({ header: 'MEDICAL', getValue: r => (r.memberId ? medicalMap[r.memberId] || '' : '') });
-      }
-      if (showTechnical) {
-        extractors.push({ header: 'TECHNICAL', getValue: r => (r.memberId ? technicalMap[r.memberId] || '' : '') });
-      }
-      if (showPhone) {
-        extractors.push({ header: 'PHONE', getValue: r => r.cells.phone?.value || '' });
-      }
-      if (showEmail) {
-        extractors.push({ header: 'EMAIL', getValue: r => (r.memberId ? emailMap[r.memberId] || '' : '') });
-      }
-      extractors.push({ header: 'AGENCY/TEAM', getValue: r => r.cells.agencyTeam?.value || '' });
-      extractors.push({ header: 'TIME IN', getValue: r => r.cells.timeIn?.value || '' });
-      extractors.push({ header: 'TIME OUT', getValue: r => r.cells.timeOut?.value || '' });
-      extractors.push({
-        header: 'HOURS',
-        getValue: r => showCalcHours ? calculateHours(r.cells.timeIn?.value || '', r.cells.timeOut?.value || '') : (r.cells.hours?.value || '')
-      });
-      extractors.push({ header: 'ADDITIONAL INFORMATION', getValue: r => r.cells.additionalInfo?.value || '' });
-    } else if (formType === 'fitness') {
-      if (showId) {
-        extractors.push({ header: 'ID', getValue: r => (r.memberId ? idsMap[r.memberId] || '' : '') });
-      }
-      extractors.push({ header: 'NAME', getValue: r => r.cells.name?.value || '' });
-      if (showStatus) {
-        extractors.push({ header: 'STATUS', getValue: r => (r.memberId ? statusMap[r.memberId] || '' : '') });
-      }
-      if (showRole) {
-        extractors.push({ header: 'ROLE', getValue: r => (r.memberId ? rolesMap[r.memberId] || '' : '') });
-      }
-      if (showPositions) {
-        extractors.push({ header: 'POSITION', getValue: r => (r.memberId ? positionsMap[r.memberId] || '' : '') });
-      }
-      if (showMedical) {
-        extractors.push({ header: 'MEDICAL', getValue: r => (r.memberId ? medicalMap[r.memberId] || '' : '') });
-      }
-      if (showTechnical) {
-        extractors.push({ header: 'TECHNICAL', getValue: r => (r.memberId ? technicalMap[r.memberId] || '' : '') });
-      }
-      if (showPhone) {
-        extractors.push({ header: 'PHONE', getValue: r => r.cells.phone?.value || '' });
-      }
-      if (showEmail) {
-        extractors.push({ header: 'EMAIL', getValue: r => (r.memberId ? emailMap[r.memberId] || '' : '') });
-      }
+    }
+
+    // ── Optional ID (always before name)
+    if (columnFlags.showId) {
+      extractors.push({ header: 'ID', getValue: r => (r.memberId ? idsMap[r.memberId] || '' : '') });
+    }
+
+    // ── Name column
+    extractors.push({
+      header: formType === 'fitness' ? 'NAME' : 'NAME (PERSONNEL) -OR- DESCRIPTION (EQUIPMENT)',
+      getValue: r => r.cells.name?.value || ''
+    });
+
+    // ── Shared optional columns (same across all form types)
+    if (columnFlags.showStatus) extractors.push({ header: 'STATUS', getValue: r => (r.memberId ? statusMap[r.memberId] || '' : '') });
+    if (columnFlags.showRole) extractors.push({ header: 'ROLE', getValue: r => (r.memberId ? rolesMap[r.memberId] || '' : '') });
+    if (columnFlags.showPositions) extractors.push({ header: 'POSITION', getValue: r => (r.memberId ? positionsMap[r.memberId] || '' : '') });
+    if (columnFlags.showMedical) extractors.push({ header: 'MEDICAL', getValue: r => (r.memberId ? medicalMap[r.memberId] || '' : '') });
+    if (columnFlags.showTechnical) extractors.push({ header: 'TECHNICAL', getValue: r => (r.memberId ? technicalMap[r.memberId] || '' : '') });
+    if (columnFlags.showPhone) extractors.push({ header: 'PHONE', getValue: r => r.cells.phone?.value || '' });
+    if (columnFlags.showEmail) extractors.push({ header: 'EMAIL', getValue: r => (r.memberId ? emailMap[r.memberId] || '' : '') });
+
+    // ── Form-specific suffix columns
+    if (formType === 'fitness') {
       extractors.push({ header: 'TIME IN', getValue: r => r.cells.timeIn?.value || '' });
       extractors.push({ header: 'START WEIGHT', getValue: r => r.cells.weightStart?.value || '' });
       extractors.push({ header: 'LAP 1 START TIME', getValue: r => r.cells.lap1Start?.value || '' });
@@ -258,35 +228,41 @@ export function ExerciseDetails() {
           getValue: r => calculateHours(r.cells.timeIn?.value || '', r.cells.timeOut?.value || '')
         });
       }
+    } else {
+      if (formType === '211b') {
+        extractors.push({ header: 'AGENCY/TEAM', getValue: r => r.cells.agencyTeam?.value || '' });
+      }
+      extractors.push({ header: formType === '211a' ? 'DATE/TIME IN' : 'TIME IN', getValue: r => r.cells.timeIn?.value || '' });
+      extractors.push({ header: formType === '211a' ? 'DATE/TIME OUT' : 'TIME OUT', getValue: r => r.cells.timeOut?.value || '' });
+      extractors.push({
+        header: 'HOURS',
+        getValue: r => showCalcHours ? calculateHours(r.cells.timeIn?.value || '', r.cells.timeOut?.value || '') : (r.cells.hours?.value || '')
+      });
+      extractors.push({ header: 'ADDITIONAL INFORMATION', getValue: r => r.cells.additionalInfo?.value || '' });
     }
 
+    // ── Multi-period support
     const isMultiPeriod = !!(formState?.periods && formState.periods.length > 1);
-
     if (isMultiPeriod) {
-      extractors.unshift({
-        header: 'OPERATIONAL PERIOD',
-        getValue: (r: any) => r._periodLabel || ''
-      });
+      extractors.unshift({ header: 'OPERATIONAL PERIOD', getValue: r => r._periodLabel || '' });
     }
 
     const headers = extractors.map(e => escapeCsv(e.header)).join(',');
     let rows: string[] = [];
 
     if (isMultiPeriod && formState?.periods) {
-      rows = formState.periods.flatMap(p => {
-        return p.rows
+      rows = formState.periods.flatMap(p =>
+        p.rows
           .filter(r => !r.isDeleted)
           .map(row => {
             const rowWithPeriod = { ...row, _periodLabel: p.label };
-            return extractors.map(e => escapeCsv(e.getValue(rowWithPeriod as any))).join(',');
-          });
-      });
+            return extractors.map(e => escapeCsv(e.getValue(rowWithPeriod))).join(',');
+          })
+      );
     } else {
       rows = (formState?.rows || [])
         .filter(r => !r.isDeleted)
-        .map(row => {
-          return extractors.map(e => escapeCsv(e.getValue(row))).join(',');
-        });
+        .map(row => extractors.map(e => escapeCsv(e.getValue(row as any))).join(','));
     }
 
     const csvContent = [headers, ...rows].join('\n');
@@ -300,35 +276,44 @@ export function ExerciseDetails() {
     document.body.removeChild(link);
   };
 
+  // ── Early return guards ─────────────────────────────────
+
   if (!id || (!isLocal && !contextId) || (!isLocal && !currentExercise)) {
     return <Navigate to="/" replace />;
   }
 
-  const commonFormProps = {
-    ref: componentRef,
-    formState: formState!,
-    showPhone,
-    showEmail,
-    emailMap,
-    showCalcHours,
-    showId,
-    idsMap,
-    showStatus,
-    statusMap,
-    showRole,
-    rolesMap,
-    showPositions,
-    positionsMap,
-    showMedical,
-    medicalMap,
-    showTechnical,
-    technicalMap,
-    highlightChanges,
-    activityType,
-    onUpdateHeader: updateHeaderCell,
-    onUpdateRow: updateRowCell,
-    onRemoveRow: removeRow,
-    onRestoreRow: restoreRow,
+  // ── Render form component for a given form-state slice ──
+
+  const renderForm = (
+    props: {
+      formState: { headers: FormHeaderData; rows: FormRowData[] };
+      onUpdateHeader: (key: keyof FormHeaderData, val: string) => void;
+      onUpdateRow: (rowId: string, colKey: keyof FormRowData['cells'], val: string) => void;
+      ref?: React.Ref<HTMLDivElement>;
+    }
+  ) => {
+    const shared = {
+      formState: props.formState,
+      ...columnFlags,
+      showCalcHours,
+      emailMap,
+      idsMap,
+      statusMap,
+      rolesMap,
+      positionsMap,
+      medicalMap,
+      technicalMap,
+      highlightChanges,
+      activityType,
+      onUpdateHeader: props.onUpdateHeader,
+      onUpdateRow: props.onUpdateRow,
+      onRemoveRow: removeRow,
+      onRestoreRow: restoreRow,
+    };
+
+    if (formType === 'fitness') return <ICS211Form ref={props.ref} {...shared} showValidation={showValidation} />;
+    if (formType === '211b') return <ICS211BForm ref={props.ref} {...shared} />;
+    return <ICS211AForm ref={props.ref} {...shared} />;
   };
 
   return (
@@ -700,7 +685,7 @@ export function ExerciseDetails() {
                   </Select.Root>
                 </div>
 
-                {/* Data dropdown */}
+                {/* Data-driven column toggles dropdown */}
                 <DropdownMenu.Root>
                   <DropdownMenu.Trigger asChild>
                     <button className="select-trigger" style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, width: 'auto' }}>
@@ -716,181 +701,30 @@ export function ExerciseDetails() {
                       sideOffset={6}
                       style={{ padding: 4, width: 'max-content' }}
                     >
-                      <DropdownMenu.Item
-                        onSelect={(e) => { e.preventDefault(); setShowPhone(!showPhone); }}
-                        style={{
-                          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                          gap: 16, padding: '7px 10px', borderRadius: 6, cursor: 'pointer', outline: 'none',
-                          fontSize: '0.8125rem', color: 'var(--slate-12)',
-                        }}
-                        className="select-item"
-                      >
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                          <Phone size={14} style={{ color: 'var(--slate-9)' }} />
-                          Phone numbers
-                        </div>
-                        <Switch.Root
-                          checked={showPhone}
-                          className="switch-root"
-                          style={{ pointerEvents: 'none' }}
+                      {COLUMN_TOGGLES.map(({ key, label, icon: Icon, className }) => (
+                        <DropdownMenu.Item
+                          key={key}
+                          onSelect={(e) => { e.preventDefault(); toggleColumn(key); }}
+                          style={{
+                            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                            gap: 16, padding: '7px 10px', borderRadius: 6, cursor: 'pointer', outline: 'none',
+                            fontSize: '0.8125rem', color: 'var(--slate-12)',
+                          }}
+                          className={`select-item ${className || ''}`}
                         >
-                          <Switch.Thumb className="switch-thumb" />
-                        </Switch.Root>
-                      </DropdownMenu.Item>
-
-                      <DropdownMenu.Item
-                        onSelect={(e) => { e.preventDefault(); setShowEmail(!showEmail); }}
-                        style={{
-                          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                          gap: 16, padding: '7px 10px', borderRadius: 6, cursor: 'pointer', outline: 'none',
-                          fontSize: '0.8125rem', color: 'var(--slate-12)',
-                        }}
-                        className="select-item"
-                      >
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                          <Mail size={14} style={{ color: 'var(--slate-9)' }} />
-                          Email
-                        </div>
-                        <Switch.Root
-                          checked={showEmail}
-                          className="switch-root"
-                          style={{ pointerEvents: 'none' }}
-                        >
-                          <Switch.Thumb className="switch-thumb" />
-                        </Switch.Root>
-                      </DropdownMenu.Item>
-
-                      <DropdownMenu.Item
-                        onSelect={(e) => { e.preventDefault(); setShowId(!showId); }}
-                        style={{
-                          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                          gap: 16, padding: '7px 10px', borderRadius: 6, cursor: 'pointer', outline: 'none',
-                          fontSize: '0.8125rem', color: 'var(--slate-12)',
-                        }}
-                        className="select-item no-print"
-                      >
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                          <Hash size={14} style={{ color: 'var(--slate-9)' }} />
-                          ID
-                        </div>
-                        <Switch.Root
-                          checked={showId}
-                          className="switch-root"
-                          style={{ pointerEvents: 'none' }}
-                        >
-                          <Switch.Thumb className="switch-thumb" />
-                        </Switch.Root>
-                      </DropdownMenu.Item>
-
-                      <DropdownMenu.Item
-                        onSelect={(e) => { e.preventDefault(); setShowStatus(!showStatus); }}
-                        style={{
-                          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                          gap: 16, padding: '7px 10px', borderRadius: 6, cursor: 'pointer', outline: 'none',
-                          fontSize: '0.8125rem', color: 'var(--slate-12)',
-                        }}
-                        className="select-item no-print"
-                      >
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                          <Shield size={14} style={{ color: 'var(--slate-9)' }} />
-                          Status
-                        </div>
-                        <Switch.Root
-                          checked={showStatus}
-                          className="switch-root"
-                          style={{ pointerEvents: 'none' }}
-                        >
-                          <Switch.Thumb className="switch-thumb" />
-                        </Switch.Root>
-                      </DropdownMenu.Item>
-
-                      <DropdownMenu.Item
-                        onSelect={(e) => { e.preventDefault(); setShowRole(!showRole); }}
-                        style={{
-                          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                          gap: 16, padding: '7px 10px', borderRadius: 6, cursor: 'pointer', outline: 'none',
-                          fontSize: '0.8125rem', color: 'var(--slate-12)',
-                        }}
-                        className="select-item no-print"
-                      >
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                          <Briefcase size={14} style={{ color: 'var(--slate-9)' }} />
-                          Role
-                        </div>
-                        <Switch.Root
-                          checked={showRole}
-                          className="switch-root"
-                          style={{ pointerEvents: 'none' }}
-                        >
-                          <Switch.Thumb className="switch-thumb" />
-                        </Switch.Root>
-                      </DropdownMenu.Item>
-
-                      <DropdownMenu.Item
-                        onSelect={(e) => { e.preventDefault(); setShowPositions(!showPositions); }}
-                        style={{
-                          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                          gap: 16, padding: '7px 10px', borderRadius: 6, cursor: 'pointer', outline: 'none',
-                          fontSize: '0.8125rem', color: 'var(--slate-12)',
-                        }}
-                        className="select-item no-print"
-                      >
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                          <UserCheck size={14} style={{ color: 'var(--slate-9)' }} />
-                          Position
-                        </div>
-                        <Switch.Root
-                          checked={showPositions}
-                          className="switch-root"
-                          style={{ pointerEvents: 'none' }}
-                        >
-                          <Switch.Thumb className="switch-thumb" />
-                        </Switch.Root>
-                      </DropdownMenu.Item>
-
-                      <DropdownMenu.Item
-                        onSelect={(e) => { e.preventDefault(); setShowMedical(!showMedical); }}
-                        style={{
-                          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                          gap: 16, padding: '7px 10px', borderRadius: 6, cursor: 'pointer', outline: 'none',
-                          fontSize: '0.8125rem', color: 'var(--slate-12)',
-                        }}
-                        className="select-item no-print"
-                      >
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                          <HeartPulse size={14} style={{ color: 'var(--slate-9)' }} />
-                          Medical
-                        </div>
-                        <Switch.Root
-                          checked={showMedical}
-                          className="switch-root"
-                          style={{ pointerEvents: 'none' }}
-                        >
-                          <Switch.Thumb className="switch-thumb" />
-                        </Switch.Root>
-                      </DropdownMenu.Item>
-
-                      <DropdownMenu.Item
-                        onSelect={(e) => { e.preventDefault(); setShowTechnical(!showTechnical); }}
-                        style={{
-                          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                          gap: 16, padding: '7px 10px', borderRadius: 6, cursor: 'pointer', outline: 'none',
-                          fontSize: '0.8125rem', color: 'var(--slate-12)',
-                        }}
-                        className="select-item no-print"
-                      >
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                          <Wrench size={14} style={{ color: 'var(--slate-9)' }} />
-                          Technical
-                        </div>
-                        <Switch.Root
-                          checked={showTechnical}
-                          className="switch-root"
-                          style={{ pointerEvents: 'none' }}
-                        >
-                          <Switch.Thumb className="switch-thumb" />
-                        </Switch.Root>
-                      </DropdownMenu.Item>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <Icon size={14} style={{ color: 'var(--slate-9)' }} />
+                            {label}
+                          </div>
+                          <Switch.Root
+                            checked={columnFlags[key]}
+                            className="switch-root"
+                            style={{ pointerEvents: 'none' }}
+                          >
+                            <Switch.Thumb className="switch-thumb" />
+                          </Switch.Root>
+                        </DropdownMenu.Item>
+                      ))}
                     </DropdownMenu.Content>
                   </DropdownMenu.Portal>
                 </DropdownMenu.Root>
@@ -962,34 +796,9 @@ export function ExerciseDetails() {
               {formState.periods && formState.periods.length > 1 ? (
                 formState.periods.map((period, pIdx) => {
                   const isLastPeriod = pIdx === formState.periods!.length - 1;
-                  const periodState = {
+                  const periodFormState = {
                     headers: period.headers,
-                    rows: period.rows
-                  };
-                  const periodCommonProps = {
-                    formState: periodState,
-                    showPhone,
-                    showEmail,
-                    emailMap,
-                    showCalcHours,
-                    showId,
-                    idsMap,
-                    showStatus,
-                    statusMap,
-                    showRole,
-                    rolesMap,
-                    showPositions,
-                    positionsMap,
-                    showMedical,
-                    medicalMap,
-                    showTechnical,
-                    technicalMap,
-                    highlightChanges,
-                    onUpdateHeader: (key: keyof FormHeaderData, val: string) => updateHeaderCell(key, val, pIdx),
-                    onUpdateRow: (rowId: string, colKey: keyof FormRowData['cells'], val: string) => updateRowCell(rowId, colKey, val, pIdx),
-                    onRemoveRow: (rowId: string) => removeRow(rowId),
-                    onRestoreRow: (rowId: string) => restoreRow(rowId),
-                    typeLabel: TYPE_LABELS[activityType] || 'Exercise'
+                    rows: period.rows,
                   };
 
                   return (
@@ -1033,29 +842,23 @@ export function ExerciseDetails() {
                         </div>
                       </div>
 
-                      {formType === 'fitness' && (
-                        <ICS211Form {...periodCommonProps} showValidation={showValidation} />
-                      )}
-                      {formType === '211a' && (
-                        <ICS211AForm {...periodCommonProps} />
-                      )}
-                      {formType === '211b' && (
-                        <ICS211BForm {...periodCommonProps} />
-                      )}
+                      {/* BUG FIX: pass activityType via renderForm instead of wrong typeLabel */}
+                      {renderForm({
+                        formState: periodFormState,
+                        onUpdateHeader: (key, val) => updateHeaderCell(key, val, pIdx),
+                        onUpdateRow: (rowId, colKey, val) => updateRowCell(rowId, colKey, val),
+                      })}
                     </div>
                   );
                 })
               ) : (
                 <div>
-                  {formType === 'fitness' && (
-                    <ICS211Form {...commonFormProps} showValidation={showValidation} />
-                  )}
-                  {formType === '211a' && (
-                    <ICS211AForm {...commonFormProps} />
-                  )}
-                  {formType === '211b' && (
-                    <ICS211BForm {...commonFormProps} />
-                  )}
+                  {renderForm({
+                    ref: componentRef,
+                    formState: formState,
+                    onUpdateHeader: updateHeaderCell,
+                    onUpdateRow: updateRowCell,
+                  })}
                 </div>
               )}
             </div>
@@ -1063,80 +866,26 @@ export function ExerciseDetails() {
         </main>
 
         {/* ── Reset Dialog ─────────────────────────────── */}
-        <Dialog.Root open={showResetModal} onOpenChange={setShowResetModal}>
-          <Dialog.Portal>
-            <Dialog.Overlay className="dialog-overlay" />
-            <Dialog.Content className="dialog-content no-print">
-              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', gap: 4, marginBottom: 20 }}>
-                <div style={{
-                  width: 52, height: 52, borderRadius: 14,
-                  background: 'var(--red-3)', border: '1px solid var(--red-6)',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 8,
-                }}>
-                  <RotateCcw size={22} style={{ color: 'var(--red-10)' }} />
-                </div>
-                <Dialog.Title style={{ fontSize: '1.125rem', fontWeight: 700, color: 'var(--slate-12)' }}>
-                  Reset all local changes?
-                </Dialog.Title>
-                <Dialog.Description style={{ fontSize: '0.875rem', color: 'var(--slate-10)', lineHeight: 1.6, maxWidth: 360 }}>
-                  This will discard all manual edits and revert the form to exactly what's in D4H. This cannot be undone.
-                </Dialog.Description>
-              </div>
-
-              <Separator.Root className="separator" style={{ marginBottom: 20 }} />
-
-              <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
-                <Dialog.Close asChild>
-                  <button className="btn btn-secondary">Cancel</button>
-                </Dialog.Close>
-                <button
-                  className="btn btn-danger"
-                  onClick={() => { resetChanges(); setShowResetModal(false); }}
-                >
-                  Reset Everything
-                </button>
-              </div>
-            </Dialog.Content>
-          </Dialog.Portal>
-        </Dialog.Root>
+        <ConfirmDialog
+          open={showResetModal}
+          onOpenChange={setShowResetModal}
+          icon={<RotateCcw size={22} style={{ color: 'var(--red-10)' }} />}
+          title="Reset all local changes?"
+          description="This will discard all manual edits and revert the form to exactly what's in D4H. This cannot be undone."
+          confirmLabel="Reset Everything"
+          onConfirm={resetChanges}
+        />
 
         {/* ── Delete Local Roster Dialog ─────────────────────────────── */}
-        <Dialog.Root open={showDeleteModal} onOpenChange={setShowDeleteModal}>
-          <Dialog.Portal>
-            <Dialog.Overlay className="dialog-overlay" />
-            <Dialog.Content className="dialog-content no-print">
-              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', gap: 4, marginBottom: 20 }}>
-                <div style={{
-                  width: 52, height: 52, borderRadius: 14,
-                  background: 'var(--red-3)', border: '1px solid var(--red-6)',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 8,
-                }}>
-                  <Trash2 size={22} style={{ color: 'var(--red-10)' }} />
-                </div>
-                <Dialog.Title style={{ fontSize: '1.125rem', fontWeight: 700, color: 'var(--slate-12)' }}>
-                  Delete this local roster?
-                </Dialog.Title>
-                <Dialog.Description style={{ fontSize: '0.875rem', color: 'var(--slate-10)', lineHeight: 1.6, maxWidth: 360 }}>
-                  This will permanently delete the roster and all its attendee data. This cannot be undone.
-                </Dialog.Description>
-              </div>
-
-              <Separator.Root className="separator" style={{ marginBottom: 20 }} />
-
-              <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
-                <Dialog.Close asChild>
-                  <button className="btn btn-secondary">Cancel</button>
-                </Dialog.Close>
-                <button
-                  className="btn btn-danger"
-                  onClick={() => { handleDeleteLocalRoster(); setShowDeleteModal(false); }}
-                >
-                  Delete Roster
-                </button>
-              </div>
-            </Dialog.Content>
-          </Dialog.Portal>
-        </Dialog.Root>
+        <ConfirmDialog
+          open={showDeleteModal}
+          onOpenChange={setShowDeleteModal}
+          icon={<Trash2 size={22} style={{ color: 'var(--red-10)' }} />}
+          title="Delete this local roster?"
+          description="This will permanently delete the roster and all its attendee data. This cannot be undone."
+          confirmLabel="Delete Roster"
+          onConfirm={handleDeleteLocalRoster}
+        />
 
         <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
       </div>

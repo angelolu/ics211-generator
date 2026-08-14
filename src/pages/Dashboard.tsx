@@ -66,7 +66,14 @@ export function Dashboard() {
 
   const ITEMS_PER_PAGE = 12;
   const teamTitle = localStorage.getItem('d4h_team_title') || 'Your Team';
-  const [localRosters, setLocalRosters] = useState<LocalRoster[]>([]);
+  const [localRosters, setLocalRosters] = useState<LocalRoster[]>(() => {
+    try {
+      const saved = localStorage.getItem('fitnessqual_local_rosters');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
   const [contextId, setContextId] = useState(localStorage.getItem('d4h_context_id'));
   const [viewMode, setViewMode] = useState<'activities' | 'local'>(() => {
     if (!contextId) return 'local';
@@ -79,15 +86,42 @@ export function Dashboard() {
   });
   const [currentMonth, setCurrentMonth] = useState<Date>(new Date());
 
+  const loadLocalRosters = () => {
+    try {
+      const saved = localStorage.getItem('fitnessqual_local_rosters');
+      setLocalRosters(saved ? JSON.parse(saved) : []);
+    } catch {
+      setLocalRosters([]);
+    }
+  };
+
   useEffect(() => {
     if (contextId) {
       localStorage.setItem('fitnessqual_view_mode', viewMode);
+    }
+    if (viewMode === 'local') {
+      loadLocalRosters();
     }
   }, [viewMode, contextId]);
 
   useEffect(() => {
     localStorage.setItem('fitnessqual_d4h_activities_view', activitiesView);
   }, [activitiesView]);
+
+  const handleCreateLocalRoster = () => {
+    try {
+      const saved = localStorage.getItem('fitnessqual_local_rosters');
+      const currentList: LocalRoster[] = saved ? JSON.parse(saved) : [];
+      const newId = `local_${Date.now()}`;
+      const newRoster: LocalRoster = { id: newId, title: 'New Local Roster', createdAt: new Date().toISOString(), type: 'local' };
+      const updated = [newRoster, ...currentList.filter(r => r.id !== newId)];
+      setLocalRosters(updated);
+      localStorage.setItem('fitnessqual_local_rosters', JSON.stringify(updated));
+      navigate(`/exercise/${newId}`, { state: { exercise: newRoster } });
+    } catch (e) {
+      console.error('Failed to create local roster', e);
+    }
+  };
 
   const load = async (quiet = false, targetView = activitiesView, targetMonth = currentMonth) => {
     if (!contextId) {
@@ -130,6 +164,7 @@ export function Dashboard() {
       if (contextId) {
         load(true, activitiesView, currentMonth);
       }
+      loadLocalRosters();
     };
     window.addEventListener('focus', handleWindowFocus);
     return () => window.removeEventListener('focus', handleWindowFocus);
@@ -306,14 +341,7 @@ export function Dashboard() {
             ) : (
               <button
                 className="btn btn-primary"
-                onClick={() => {
-                  const newId = `local_${Date.now()}`;
-                  const newRoster: LocalRoster = { id: newId, title: 'New Local Roster', createdAt: new Date().toISOString(), type: 'local' };
-                  const updated = [newRoster, ...localRosters];
-                  setLocalRosters(updated);
-                  localStorage.setItem('fitnessqual_local_rosters', JSON.stringify(updated));
-                  navigate(`/exercise/${newId}`, { state: { exercise: newRoster } });
-                }}
+                onClick={handleCreateLocalRoster}
               >
                 + Add Local Roster
               </button>
@@ -476,62 +504,71 @@ export function Dashboard() {
               </div>
             ) : (
               <div style={{ display: 'grid', gap: 10 }}>
-                {localRosters.map((roster, idx) => (
-                  <div
-                    key={roster.id}
-                    className="card card-interactive animate-slide-up"
-                    style={{ padding: '16px 20px', display: 'flex', alignItems: 'center', gap: 16, animationDelay: `${idx * 30}ms`, animationFillMode: 'both' }}
-                    onClick={() => navigate(`/exercise/${roster.id}`, { state: { exercise: roster } })}
-                  >
-                    <div style={{
-                      minWidth: 56, height: 56, borderRadius: 12,
-                      background: '#F0FDF4', border: '1px solid #BBF7D0',
-                      display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-                      flexShrink: 0,
-                    }}>
-                      <div style={{ fontSize: '0.6875rem', fontWeight: 700, color: '#166534', textTransform: 'uppercase', letterSpacing: '0.06em', lineHeight: 1 }}>
-                        {format(new Date(roster.createdAt), 'MMM')}
-                      </div>
-                      <div style={{ fontSize: '1.375rem', fontWeight: 800, color: '#14532D', lineHeight: 1.1 }}>
-                        {format(new Date(roster.createdAt), 'd')}
-                      </div>
-                    </div>
+                {localRosters.map((roster, idx) => {
+                  let title = roster.title;
+                  let displayDate = new Date(roster.createdAt);
+                  const saved = localStorage.getItem(`d4h_form_${roster.id}`);
+                  if (saved) {
+                    try {
+                      const parsed = JSON.parse(saved);
+                      if (parsed.headers?.exerciseName?.value) title = parsed.headers.exerciseName.value;
+                      if (parsed.headers?.date?.value) {
+                        const parsedDate = new Date(parsed.headers.date.value);
+                        if (!isNaN(parsedDate.getTime())) {
+                          displayDate = parsedDate;
+                        }
+                      }
+                    } catch (e) { }
+                  }
 
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 5 }}>
-                        <span className="badge" style={{ background: '#DCFCE7', color: '#166534', border: '1px solid #BBF7D0' }}>Local</span>
-                        <span style={{ fontWeight: 600, fontSize: '0.9375rem', color: 'var(--slate-12)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                          {(() => {
-                            const saved = localStorage.getItem(`d4h_form_${roster.id}`);
-                            if (saved) {
-                              try {
-                                const parsed = JSON.parse(saved);
-                                if (parsed.headers?.exerciseName?.value) return parsed.headers.exerciseName.value;
-                              } catch (e) { }
-                            }
-                            return roster.title;
-                          })()}
-                        </span>
-                      </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: '0.8125rem', color: 'var(--slate-10)' }}>
-                          <Calendar size={13} />
-                          <span>{format(new Date(roster.createdAt), 'HHmm')}</span>
+                  return (
+                    <div
+                      key={roster.id}
+                      className="card card-interactive animate-slide-up"
+                      style={{ padding: '16px 20px', display: 'flex', alignItems: 'center', gap: 16, animationDelay: `${idx * 30}ms`, animationFillMode: 'both' }}
+                      onClick={() => navigate(`/exercise/${roster.id}`, { state: { exercise: roster } })}
+                    >
+                      <div style={{
+                        minWidth: 56, height: 56, borderRadius: 12,
+                        background: '#F0FDF4', border: '1px solid #BBF7D0',
+                        display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+                        flexShrink: 0,
+                      }}>
+                        <div style={{ fontSize: '0.6875rem', fontWeight: 700, color: '#166534', textTransform: 'uppercase', letterSpacing: '0.06em', lineHeight: 1 }}>
+                          {format(displayDate, 'MMM')}
+                        </div>
+                        <div style={{ fontSize: '1.375rem', fontWeight: 800, color: '#14532D', lineHeight: 1.1 }}>
+                          {format(displayDate, 'd')}
                         </div>
                       </div>
-                    </div>
 
-                    <div style={{
-                      width: 32, height: 32, borderRadius: 8,
-                      background: 'var(--slate-3)', border: '1px solid var(--slate-5)',
-                      display: 'flex', alignItems: 'center', justifyContent: 'center',
-                      flexShrink: 0, color: 'var(--slate-9)',
-                      transition: 'all 0.15s',
-                    }}>
-                      <ChevronRight size={16} />
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 5 }}>
+                          <span className="badge" style={{ background: '#DCFCE7', color: '#166534', border: '1px solid #BBF7D0' }}>Local</span>
+                          <span style={{ fontWeight: 600, fontSize: '0.9375rem', color: 'var(--slate-12)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            {title}
+                          </span>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: '0.8125rem', color: 'var(--slate-10)' }}>
+                            <Calendar size={13} />
+                            <span>{format(new Date(roster.createdAt), 'HHmm')}</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div style={{
+                        width: 32, height: 32, borderRadius: 8,
+                        background: 'var(--slate-3)', border: '1px solid var(--slate-5)',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        flexShrink: 0, color: 'var(--slate-9)',
+                        transition: 'all 0.15s',
+                      }}>
+                        <ChevronRight size={16} />
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )
           )}
