@@ -208,6 +208,16 @@ export function useFormState(exerciseId: number | string | undefined, contextId:
   const [isLoading, setIsLoading] = useState(true);
   const [isPulling, setIsPulling] = useState(false);
   const [hasPendingChanges, setHasPendingChanges] = useState(false);
+  const [pendingChanges, setPendingChanges] = useState<string[]>([]);
+  const [removedAttendeesPrompt, setRemovedAttendeesPrompt] = useState<{ count: number; memberNames: string[] } | null>(null);
+  const pendingPullDataRef = useRef<{
+    attData: any[];
+    freshExercise: any;
+    memberData: any[];
+    qualRes: any;
+    maps: any;
+    removedRowIds: Set<string>;
+  } | null>(null);
   const [memberMaps, setMemberMaps] = useState<AllMemberMaps>(EMPTY_MAPS);
   const [highlightChanges, setHighlightChanges] = useState(() => {
     return localStorage.getItem('d4h_highlight_changes') === 'true';
@@ -327,7 +337,7 @@ export function useFormState(exerciseId: number | string | undefined, contextId:
                     ? await getMemberDetails(contextIdNum, memberIds)
                     : [];
 
-                  let changesFound = false;
+                  const detectedChanges: string[] = [];
 
                   if (freshExercise) {
                     const remoteExName = freshExercise.referenceDescription || freshExercise.description || 'Unnamed Exercise';
@@ -335,69 +345,91 @@ export function useFormState(exerciseId: number | string | undefined, contextId:
                     const remoteExNumber = freshExercise.id.toString();
                     const remoteCheckInLoc = formatActivityLocation(freshExercise);
 
-                    if (
-                      (currentForm.headers.exerciseName && currentForm.headers.exerciseName.originalValue !== remoteExName) ||
-                      (currentForm.headers.date && currentForm.headers.date.originalValue !== remoteDate) ||
-                      (currentForm.headers.exerciseNumber && currentForm.headers.exerciseNumber.originalValue !== remoteExNumber) ||
-                      (currentForm.headers.checkInLocation && currentForm.headers.checkInLocation.originalValue !== remoteCheckInLoc)
-                    ) {
-                      changesFound = true;
+                    if (currentForm.headers.exerciseName && currentForm.headers.exerciseName.originalValue !== remoteExName) {
+                      detectedChanges.push(`Exercise Name: "${currentForm.headers.exerciseName.originalValue || ''}" → "${remoteExName}"`);
+                    }
+                    if (currentForm.headers.date && currentForm.headers.date.originalValue !== remoteDate) {
+                      detectedChanges.push(`Date: "${currentForm.headers.date.originalValue || ''}" → "${remoteDate}"`);
+                    }
+                    if (currentForm.headers.exerciseNumber && currentForm.headers.exerciseNumber.originalValue !== remoteExNumber) {
+                      detectedChanges.push(`Exercise #: "${currentForm.headers.exerciseNumber.originalValue || ''}" → "${remoteExNumber}"`);
+                    }
+                    if (currentForm.headers.checkInLocation && currentForm.headers.checkInLocation.originalValue !== remoteCheckInLoc) {
+                      detectedChanges.push(`Check-In Location: "${currentForm.headers.checkInLocation.originalValue || ''}" → "${remoteCheckInLoc}"`);
                     }
                   }
 
-                  if (!changesFound) {
-                    const currentMemberRows = currentForm.periods
-                      ? currentForm.periods.flatMap(p => p.rows.filter(r => typeof r.memberId === 'number' && !r.isDeleted))
-                      : currentForm.rows.filter(r => typeof r.memberId === 'number' && !r.isDeleted);
-                    const currentMemberIds = new Set(currentMemberRows.map(r => r.memberId));
+                  const currentMemberRows = currentForm.periods
+                    ? currentForm.periods.flatMap(p => p.rows.filter(r => typeof r.memberId === 'number' && !r.isDeleted))
+                    : currentForm.rows.filter(r => typeof r.memberId === 'number' && !r.isDeleted);
+                  const currentMemberMap = new Map(currentMemberRows.map(r => [r.memberId!, r]));
 
-                    if (currentMemberRows.length !== attData.length) {
-                      changesFound = true;
-                    } else {
-                      for (const att of attData) {
-                        if (!currentMemberIds.has(att.member.id)) {
-                          changesFound = true;
-                          break;
-                        }
-                      }
+                  // Check for added attendees
+                  for (const att of attData) {
+                    if (!currentMemberMap.has(att.member.id)) {
+                      const memberDetail = memberData.find(m => m.id === att.member.id);
+                      detectedChanges.push(`Added attendee: ${memberDetail?.name || att.member.name || `Member #${att.member.id}`}`);
                     }
+                  }
 
-                    if (!changesFound) {
-                      for (const att of attData) {
-                        const row = currentMemberRows.find(r => r.memberId === att.member.id);
-                        if (!row) {
-                          changesFound = true;
-                          break;
-                        }
+                  // Check for removed attendees
+                  const remoteMemberIds = new Set(attData.map(a => a.member.id));
+                  for (const row of currentMemberRows) {
+                    if (row.memberId && !remoteMemberIds.has(row.memberId)) {
+                      detectedChanges.push(`Removed attendee: ${row.cells.name.value || row.cells.name.originalValue || `Member #${row.memberId}`}`);
+                    }
+                  }
 
-                        const memberDetail = memberData.find(m => m.id === att.member.id);
-                        const remoteName = memberDetail?.name || 'Unknown Member';
-                        const remotePhone = memberDetail?.mobile?.phone || memberDetail?.home?.phone || memberDetail?.work?.phone || '';
+                  // Check for attendee cell modifications
+                  for (const att of attData) {
+                    const row = currentMemberMap.get(att.member.id);
+                    if (row) {
+                      const memberDetail = memberData.find(m => m.id === att.member.id);
+                      const remoteName = memberDetail?.name || 'Unknown Member';
+                      const remotePhone = memberDetail?.mobile?.phone || memberDetail?.home?.phone || memberDetail?.work?.phone || '';
 
-                        const startIso = att.startsAt || freshExercise?.startsAt || currentEx?.startsAt;
-                        const endIso = att.endsAt || freshExercise?.endsAt || currentEx?.endsAt;
-                        const isTodayOrFuture = isEventTodayOrFuture(freshExercise?.startsAt || currentEx?.startsAt || startIso);
-                        const remoteTimeIn = isTodayOrFuture ? '' : formatD4HTime(startIso);
-                        const remoteTimeOut = isTodayOrFuture ? '' : formatD4HTime(endIso);
-                        const remoteHours = isTodayOrFuture ? '' : calculateD4HHours(startIso, endIso, remoteTimeIn, remoteTimeOut, att.hours, att.duration);
+                      const startIso = att.startsAt || freshExercise?.startsAt || currentEx?.startsAt;
+                      const endIso = att.endsAt || freshExercise?.endsAt || currentEx?.endsAt;
+                      const isTodayOrFuture = isEventTodayOrFuture(freshExercise?.startsAt || currentEx?.startsAt || startIso);
+                      const remoteTimeIn = isTodayOrFuture ? '' : formatD4HTime(startIso);
+                      const remoteTimeOut = isTodayOrFuture ? '' : formatD4HTime(endIso);
+                      const remoteHours = isTodayOrFuture ? '' : calculateD4HHours(startIso, endIso, remoteTimeIn, remoteTimeOut, att.hours, att.duration);
 
-                        if (
-                          row.cells.name.originalValue !== remoteName ||
-                          row.cells.phone.originalValue !== remotePhone ||
-                          row.cells.timeIn.originalValue !== remoteTimeIn ||
-                          row.cells.timeOut.originalValue !== remoteTimeOut ||
-                          row.cells.hours.originalValue !== remoteHours
-                        ) {
-                          changesFound = true;
-                          break;
-                        }
+                      const memberDisplayName = row.cells.name.value || remoteName;
+                      if (row.cells.name.originalValue !== remoteName) {
+                        detectedChanges.push(`Attendee "${memberDisplayName}" name: "${row.cells.name.originalValue}" → "${remoteName}"`);
+                      }
+                      if (row.cells.phone.originalValue !== remotePhone) {
+                        detectedChanges.push(`Attendee "${memberDisplayName}" phone: "${row.cells.phone.originalValue}" → "${remotePhone}"`);
+                      }
+                      if (row.cells.timeIn.originalValue !== remoteTimeIn) {
+                        detectedChanges.push(`Attendee "${memberDisplayName}" time in: "${row.cells.timeIn.originalValue || '(none)'}" → "${remoteTimeIn || '(none)'}"`);
+                      }
+                      if (row.cells.timeOut.originalValue !== remoteTimeOut) {
+                        detectedChanges.push(`Attendee "${memberDisplayName}" time out: "${row.cells.timeOut.originalValue || '(none)'}" → "${remoteTimeOut || '(none)'}"`);
+                      }
+                      if (row.cells.hours.originalValue !== remoteHours) {
+                        detectedChanges.push(`Attendee "${memberDisplayName}" hours: "${row.cells.hours.originalValue || '(none)'}" → "${remoteHours || '(none)'}"`);
                       }
                     }
                   }
 
-                  setHasPendingChanges(changesFound);
+                  if (detectedChanges.length > 0) {
+                    setHasPendingChanges(true);
+                    setPendingChanges(detectedChanges);
+                    if (import.meta.env.DEV) {
+                      console.groupCollapsed(`%c[D4H Sync] ${detectedChanges.length} pending change(s) detected`, 'color: #b45309; font-weight: bold; background: #fef3c7; padding: 2px 6px; border-radius: 4px;');
+                      detectedChanges.forEach(change => console.log('•', change));
+                      console.groupEnd();
+                    }
+                  } else {
+                    setHasPendingChanges(false);
+                    setPendingChanges([]);
+                  }
                 } catch (e) {
-                  console.error('[Background Check] Error checking D4H changes:', e);
+                  if (import.meta.env.DEV) {
+                    console.error('[Background Check] Error checking D4H changes:', e);
+                  }
                 }
               };
 
@@ -609,6 +641,12 @@ export function useFormState(exerciseId: number | string | undefined, contextId:
 
   // ── Mutation helpers ──────────────────────────────────────
 
+  const isCellEditedLocally = (value: string, originalValue?: string | null): boolean => {
+    const normVal = (value ?? '').replace(/\r\n/g, '\n').replace(/\n+$/, '').trim();
+    const normOrig = (originalValue ?? '').replace(/\r\n/g, '\n').replace(/\n+$/, '').trim();
+    return normVal !== normOrig;
+  };
+
   const updateHeaderCell = (key: keyof FormHeaderData, value: string, periodIndex?: number) => {
     setFormState(prev => {
       if (!prev) return prev;
@@ -618,6 +656,7 @@ export function useFormState(exerciseId: number | string | undefined, contextId:
         newPeriods = newPeriods.map((p, idx) => {
           if (idx !== periodIndex) return p;
           const cell = p.headers[key];
+          const isEdited = isCellEditedLocally(value, cell.originalValue);
           return {
             ...p,
             headers: {
@@ -625,7 +664,7 @@ export function useFormState(exerciseId: number | string | undefined, contextId:
               [key]: {
                 ...cell,
                 value,
-                isEditedLocally: value !== cell.originalValue,
+                isEditedLocally: isEdited,
                 conflictValue: cell.conflictValue && value === cell.conflictValue ? undefined : cell.conflictValue
               }
             }
@@ -636,12 +675,13 @@ export function useFormState(exerciseId: number | string | undefined, contextId:
       // BUG FIX: Only update top-level headers when no period is targeted
       if (periodIndex === undefined) {
         const cell = prev.headers[key];
+        const isEdited = isCellEditedLocally(value, cell.originalValue);
         const newTopHeaders = {
           ...prev.headers,
           [key]: {
             ...cell,
             value,
-            isEditedLocally: value !== cell.originalValue,
+            isEditedLocally: isEdited,
             conflictValue: cell.conflictValue && value === cell.conflictValue ? undefined : cell.conflictValue
           }
         };
@@ -659,6 +699,7 @@ export function useFormState(exerciseId: number | string | undefined, contextId:
       const updateRowList = (rowList: FormRowData[]) => rowList.map(r => {
         if (r.id !== rowId) return r;
         const cell = r.cells[colKey];
+        const isEdited = isCellEditedLocally(value, cell.originalValue);
         return {
           ...r,
           cells: {
@@ -666,7 +707,7 @@ export function useFormState(exerciseId: number | string | undefined, contextId:
             [colKey]: {
               ...cell,
               value,
-              isEditedLocally: value !== cell.originalValue,
+              isEditedLocally: isEdited,
               conflictValue: cell.conflictValue && value === cell.conflictValue ? undefined : cell.conflictValue
             }
           }
@@ -723,7 +764,15 @@ export function useFormState(exerciseId: number | string | undefined, contextId:
       if (!prev) return prev;
       const removeOrMark = (rowList: FormRowData[]) => rowList.filter(r => {
         if (r.id === rowId) {
-          if (r.id.startsWith('blank_') || r.id.includes('_blank_')) return false;
+          if (
+            r.memberId === undefined ||
+            r.id.startsWith('blank_') ||
+            r.id.includes('_blank_') ||
+            r.id.startsWith('custom_') ||
+            r.id.includes('_custom_')
+          ) {
+            return false;
+          }
           return true;
         }
         return true;
@@ -837,11 +886,221 @@ export function useFormState(exerciseId: number | string | undefined, contextId:
     });
   };
 
+  const applyPullData = (
+    pullPayload: {
+      attData: any[];
+      freshExercise: any;
+      memberData: any[];
+      qualRes: any;
+      maps: any;
+      removedRowIds: Set<string>;
+    },
+    removedAction?: 'remove' | 'keepCustom'
+  ) => {
+    const { attData, freshExercise, memberData, qualRes, maps, removedRowIds } = pullPayload;
+    const currentExercise = exerciseRef.current;
+
+    setMemberMaps(prev => ({
+      medicalMap: { ...prev.medicalMap, ...qualRes.medicalMap },
+      technicalMap: { ...prev.technicalMap, ...qualRes.technicalMap },
+      positionsMap: { ...prev.positionsMap, ...maps.positionsMap },
+      idsMap: { ...prev.idsMap, ...maps.idsMap },
+      statusMap: { ...prev.statusMap, ...maps.statusMap },
+      rolesMap: { ...prev.rolesMap, ...maps.rolesMap },
+      emailMap: { ...prev.emailMap, ...maps.emailMap },
+    }));
+
+    setFormState(prev => {
+      if (!prev) return prev;
+
+      const newHeaders = { ...prev.headers };
+      const isTodayOrFuture = isEventTodayOrFuture(freshExercise?.startsAt || currentExercise?.startsAt);
+
+      if (freshExercise) {
+        const remoteExName = freshExercise.referenceDescription || freshExercise.description || 'Unnamed Exercise';
+        const remoteDate = freshExercise.startsAt ? format(new Date(freshExercise.startsAt), 'MM/dd/yyyy') : '';
+        const remoteExNumber = freshExercise.id.toString();
+        const remoteCheckInLoc = formatActivityLocation(freshExercise);
+
+        const updateHeaderCellLogic = (hObj: FormHeaderData, headerKey: keyof FormHeaderData, remoteVal: string) => {
+          const cell = hObj[headerKey];
+          if (cell.isEditedLocally) {
+            hObj[headerKey] = {
+              ...cell,
+              originalValue: remoteVal,
+              isEditedLocally: cell.value !== remoteVal,
+              conflictValue: undefined
+            };
+          } else {
+            hObj[headerKey] = {
+              ...cell,
+              value: remoteVal,
+              originalValue: remoteVal,
+              isEditedLocally: false,
+              conflictValue: undefined
+            };
+          }
+        };
+
+        updateHeaderCellLogic(newHeaders, 'exerciseName', remoteExName);
+        updateHeaderCellLogic(newHeaders, 'date', remoteDate);
+        updateHeaderCellLogic(newHeaders, 'exerciseNumber', remoteExNumber);
+        updateHeaderCellLogic(newHeaders, 'checkInLocation', remoteCheckInLoc);
+      }
+
+      const updateRowsForList = (rowsList: FormRowData[], filterPeriodDate?: string) => {
+        // Step A: Handle removed attendees
+        let baseRows = rowsList;
+        if (removedAction === 'remove') {
+          baseRows = baseRows.filter(r => !removedRowIds.has(r.id));
+        } else if (removedAction === 'keepCustom') {
+          baseRows = baseRows.map(r => {
+            if (!removedRowIds.has(r.id)) return r;
+            const newCells = { ...r.cells };
+            (Object.keys(newCells) as Array<keyof FormRowData['cells']>).forEach(k => {
+              const cell = newCells[k];
+              if (cell.value && cell.value.trim() !== '') {
+                newCells[k] = {
+                  ...cell,
+                  originalValue: '',
+                  isEditedLocally: true,
+                  conflictValue: undefined,
+                };
+              }
+            });
+            return {
+              ...r,
+              id: r.id.startsWith('member_') ? r.id.replace('member_', 'custom_') : (r.id.includes('_member_') ? r.id.replace('_member_', '_custom_') : r.id),
+              memberId: undefined,
+              cells: newCells,
+            };
+          });
+        }
+
+        const updatedRows = [...baseRows];
+        const attendeesForThisList = filterPeriodDate
+          ? attData.filter(a => {
+              const aDate = a.startsAt ? format(new Date(a.startsAt), 'yyyy-MM-dd') : format(new Date(freshExercise?.startsAt || currentExercise?.startsAt), 'yyyy-MM-dd');
+              return aDate === filterPeriodDate;
+            })
+          : attData;
+
+        attendeesForThisList.forEach(att => {
+          const memberDetail = memberData.find(m => m.id === att.member.id);
+          const remoteName = memberDetail?.name || 'Unknown Member';
+          const remotePhone = memberDetail?.mobile?.phone || memberDetail?.home?.phone || memberDetail?.work?.phone || '';
+
+          const startIso = att.startsAt || freshExercise?.startsAt || currentExercise?.startsAt;
+          const endIso = att.endsAt || freshExercise?.endsAt || currentExercise?.endsAt;
+          const remoteTimeIn = isTodayOrFuture ? '' : formatD4HTime(startIso);
+          const remoteTimeOut = isTodayOrFuture ? '' : formatD4HTime(endIso);
+          const remoteHours = isTodayOrFuture ? '' : calculateD4HHours(startIso, endIso, remoteTimeIn, remoteTimeOut, att.hours, att.duration);
+
+          const existingRowIndex = updatedRows.findIndex(r => r.memberId === att.member.id);
+
+          if (existingRowIndex >= 0) {
+            const row = updatedRows[existingRowIndex];
+            const newCells = { ...row.cells };
+
+            const updateCellLogic = (colKey: keyof FormRowData['cells'], remoteVal: string) => {
+              const cell = newCells[colKey];
+              if (cell.isEditedLocally) {
+                newCells[colKey] = {
+                  ...cell,
+                  originalValue: remoteVal,
+                  isEditedLocally: cell.value !== remoteVal,
+                  conflictValue: undefined
+                };
+              } else {
+                newCells[colKey] = {
+                  ...cell,
+                  value: remoteVal,
+                  originalValue: remoteVal,
+                  isEditedLocally: false,
+                  conflictValue: undefined
+                };
+              }
+            };
+
+            updateCellLogic('name', remoteName);
+            updateCellLogic('phone', remotePhone);
+            updateCellLogic('timeIn', remoteTimeIn);
+            updateCellLogic('timeOut', remoteTimeOut);
+            updateCellLogic('hours', remoteHours);
+
+            updatedRows[existingRowIndex] = { ...row, cells: newCells };
+          } else {
+            let lastFilledIndex = -1;
+            for (let i = 0; i < updatedRows.length; i++) {
+              const isFilled = Object.values(updatedRows[i].cells).some(c => c.value.trim() !== '');
+              if (isFilled) lastFilledIndex = i;
+            }
+
+            const newAttRow: FormRowData = {
+              id: filterPeriodDate ? `p_${filterPeriodDate}_member_${att.member.id}` : `member_${att.member.id}`,
+              memberId: att.member.id,
+              cells: {
+                name: createCell(remoteName),
+                phone: createCell(remotePhone),
+                timeIn: createCell(remoteTimeIn),
+                weightStart: createCell(''),
+                lap1Start: createCell(''),
+                lap1End: createCell(''),
+                lap2Start: createCell(''),
+                lap2End: createCell(''),
+                weightEnd: createCell(''),
+                timeOut: createCell(remoteTimeOut),
+                tCard: createCell(''),
+                hours: createCell(remoteHours),
+                additionalInfo: createCell(''),
+                agencyTeam: createCell(''),
+              }
+            };
+
+            updatedRows.splice(lastFilledIndex + 1, 0, newAttRow);
+          }
+        });
+        return updatedRows;
+      };
+
+      const newRows = updateRowsForList(prev.rows);
+      const newPeriods = prev.periods ? prev.periods.map(p => {
+        const dateStr = p.id.startsWith('period_') ? p.id.replace('period_', '') : '';
+        const pHeaders = { ...p.headers };
+        if (freshExercise) {
+          const remoteExName = freshExercise.referenceDescription || freshExercise.description || 'Unnamed Exercise';
+          const remoteExNumber = freshExercise.id.toString();
+          const remoteCheckInLoc = formatActivityLocation(freshExercise);
+          const updateH = (key: keyof FormHeaderData, val: string) => {
+            const cell = pHeaders[key];
+            if (cell.isEditedLocally) {
+              pHeaders[key] = { ...cell, originalValue: val, isEditedLocally: cell.value !== val, conflictValue: undefined };
+            } else {
+              pHeaders[key] = { ...cell, value: val, originalValue: val, isEditedLocally: false, conflictValue: undefined };
+            }
+          };
+          updateH('exerciseName', remoteExName);
+          updateH('exerciseNumber', remoteExNumber);
+          updateH('checkInLocation', remoteCheckInLoc);
+        }
+        return {
+          ...p,
+          headers: pHeaders,
+          rows: updateRowsForList(p.rows, dateStr || undefined)
+        };
+      }) : undefined;
+
+      return { ...prev, headers: newHeaders, rows: newRows, periods: newPeriods };
+    });
+
+    setHasPendingChanges(false);
+    setPendingChanges([]);
+  };
+
   const pullData = async () => {
     if (!exerciseId || isNaN(contextIdNum)) return;
     setIsPulling(true);
     try {
-      // BUG FIX: Use exerciseRef.current to avoid stale closure
       const currentExercise = exerciseRef.current;
       const [attData, freshExercise] = await Promise.all([
         getAttendees(contextIdNum, exerciseId as number),
@@ -854,177 +1113,51 @@ export function useFormState(exerciseId: number | string | undefined, contextId:
       ]);
 
       const maps = buildMemberMaps(memberData, attData);
-      setMemberMaps(prev => ({
-        medicalMap: { ...prev.medicalMap, ...qualRes.medicalMap },
-        technicalMap: { ...prev.technicalMap, ...qualRes.technicalMap },
-        positionsMap: { ...prev.positionsMap, ...maps.positionsMap },
-        idsMap: { ...prev.idsMap, ...maps.idsMap },
-        statusMap: { ...prev.statusMap, ...maps.statusMap },
-        rolesMap: { ...prev.rolesMap, ...maps.rolesMap },
-        emailMap: { ...prev.emailMap, ...maps.emailMap },
-      }));
-      
-      setFormState(prev => {
-        if (!prev) return prev;
-        
-        const newHeaders = { ...prev.headers };
 
-        const isTodayOrFuture = isEventTodayOrFuture(freshExercise?.startsAt || currentExercise?.startsAt);
+      // Identify any member rows in current form that are missing in remote attData
+      const currentMemberRows = formState?.periods
+        ? formState.periods.flatMap(p => p.rows.filter(r => typeof r.memberId === 'number' && !r.isDeleted))
+        : (formState?.rows || []).filter(r => typeof r.memberId === 'number' && !r.isDeleted);
+      const remoteMemberIds = new Set(attData.map(a => a.member.id));
+      const removedRows = currentMemberRows.filter(r => r.memberId && !remoteMemberIds.has(r.memberId));
 
-        if (freshExercise) {
-          const remoteExName = freshExercise.referenceDescription || freshExercise.description || 'Unnamed Exercise';
-          const remoteDate = freshExercise.startsAt ? format(new Date(freshExercise.startsAt), 'MM/dd/yyyy') : '';
-          const remoteExNumber = freshExercise.id.toString();
-          const remoteCheckInLoc = formatActivityLocation(freshExercise);
+      const removedRowIds = new Set(removedRows.map(r => r.id));
+      const payload = { attData, freshExercise, memberData, qualRes, maps, removedRowIds };
 
-          const updateHeaderCellLogic = (hObj: FormHeaderData, headerKey: keyof FormHeaderData, remoteVal: string) => {
-            const cell = hObj[headerKey];
-            if (cell.isEditedLocally) {
-              hObj[headerKey] = {
-                ...cell,
-                originalValue: remoteVal,
-                isEditedLocally: cell.value !== remoteVal,
-                conflictValue: undefined
-              };
-            } else {
-              hObj[headerKey] = {
-                ...cell,
-                value: remoteVal,
-                originalValue: remoteVal,
-                isEditedLocally: false,
-                conflictValue: undefined
-              };
-            }
-          };
+      if (removedRows.length > 0) {
+        pendingPullDataRef.current = payload;
+        setRemovedAttendeesPrompt({
+          count: removedRows.length,
+          memberNames: removedRows.map(r => r.cells.name.value || 'Member'),
+        });
+        setIsPulling(false);
+        return;
+      }
 
-          updateHeaderCellLogic(newHeaders, 'exerciseName', remoteExName);
-          updateHeaderCellLogic(newHeaders, 'date', remoteDate);
-          updateHeaderCellLogic(newHeaders, 'exerciseNumber', remoteExNumber);
-          updateHeaderCellLogic(newHeaders, 'checkInLocation', remoteCheckInLoc);
-        }
-
-        const updateRowsForList = (rowsList: FormRowData[], filterPeriodDate?: string) => {
-          const updatedRows = [...rowsList];
-          const attendeesForThisList = filterPeriodDate
-            ? attData.filter(a => {
-                const aDate = a.startsAt ? format(new Date(a.startsAt), 'yyyy-MM-dd') : format(new Date(freshExercise?.startsAt || currentExercise?.startsAt), 'yyyy-MM-dd');
-                return aDate === filterPeriodDate;
-              })
-            : attData;
-
-          attendeesForThisList.forEach(att => {
-            const memberDetail = memberData.find(m => m.id === att.member.id);
-            const remoteName = memberDetail?.name || 'Unknown Member';
-            const remotePhone = memberDetail?.mobile?.phone || memberDetail?.home?.phone || memberDetail?.work?.phone || '';
-            
-            const startIso = att.startsAt || freshExercise?.startsAt || currentExercise?.startsAt;
-            const endIso = att.endsAt || freshExercise?.endsAt || currentExercise?.endsAt;
-            const remoteTimeIn = isTodayOrFuture ? '' : formatD4HTime(startIso);
-            const remoteTimeOut = isTodayOrFuture ? '' : formatD4HTime(endIso);
-            const remoteHours = isTodayOrFuture ? '' : calculateD4HHours(startIso, endIso, remoteTimeIn, remoteTimeOut, att.hours, att.duration);
-            
-            const existingRowIndex = updatedRows.findIndex(r => r.memberId === att.member.id);
-            
-            if (existingRowIndex >= 0) {
-              const row = updatedRows[existingRowIndex];
-              const newCells = { ...row.cells };
-              
-              const updateCellLogic = (colKey: keyof FormRowData['cells'], remoteVal: string) => {
-                const cell = newCells[colKey];
-                if (cell.isEditedLocally) {
-                  newCells[colKey] = {
-                    ...cell,
-                    originalValue: remoteVal,
-                    isEditedLocally: cell.value !== remoteVal,
-                    conflictValue: undefined
-                  };
-                } else {
-                  newCells[colKey] = {
-                    ...cell,
-                    value: remoteVal,
-                    originalValue: remoteVal,
-                    isEditedLocally: false,
-                    conflictValue: undefined
-                  };
-                }
-              };
-              
-              updateCellLogic('name', remoteName);
-              updateCellLogic('phone', remotePhone);
-              updateCellLogic('timeIn', remoteTimeIn);
-              updateCellLogic('timeOut', remoteTimeOut);
-              updateCellLogic('hours', remoteHours);
-              
-              updatedRows[existingRowIndex] = { ...row, cells: newCells };
-            } else {
-              let lastFilledIndex = -1;
-              for (let i = 0; i < updatedRows.length; i++) {
-                const isFilled = Object.values(updatedRows[i].cells).some(c => c.value.trim() !== '');
-                if (isFilled) lastFilledIndex = i;
-              }
-              
-              const newAttRow: FormRowData = {
-                id: filterPeriodDate ? `p_${filterPeriodDate}_member_${att.member.id}` : `member_${att.member.id}`,
-                memberId: att.member.id,
-                cells: {
-                  name: createCell(remoteName),
-                  phone: createCell(remotePhone),
-                  timeIn: createCell(remoteTimeIn),
-                  weightStart: createCell(''),
-                  lap1Start: createCell(''),
-                  lap1End: createCell(''),
-                  lap2Start: createCell(''),
-                  lap2End: createCell(''),
-                  weightEnd: createCell(''),
-                  timeOut: createCell(remoteTimeOut),
-                  tCard: createCell(''),
-                  hours: createCell(remoteHours),
-                  additionalInfo: createCell(''),
-                  agencyTeam: createCell(''),
-                }
-              };
-              
-              updatedRows.splice(lastFilledIndex + 1, 0, newAttRow);
-            }
-          });
-          return updatedRows;
-        };
-
-        const newRows = updateRowsForList(prev.rows);
-        const newPeriods = prev.periods ? prev.periods.map(p => {
-          const dateStr = p.id.startsWith('period_') ? p.id.replace('period_', '') : '';
-          const pHeaders = { ...p.headers };
-          if (freshExercise) {
-            const remoteExName = freshExercise.referenceDescription || freshExercise.description || 'Unnamed Exercise';
-            const remoteExNumber = freshExercise.id.toString();
-            const remoteCheckInLoc = formatActivityLocation(freshExercise);
-            const updateH = (key: keyof FormHeaderData, val: string) => {
-              const cell = pHeaders[key];
-              if (cell.isEditedLocally) {
-                pHeaders[key] = { ...cell, originalValue: val, isEditedLocally: cell.value !== val, conflictValue: undefined };
-              } else {
-                pHeaders[key] = { ...cell, value: val, originalValue: val, isEditedLocally: false, conflictValue: undefined };
-              }
-            };
-            updateH('exerciseName', remoteExName);
-            updateH('exerciseNumber', remoteExNumber);
-            updateH('checkInLocation', remoteCheckInLoc);
-          }
-          return {
-            ...p,
-            headers: pHeaders,
-            rows: updateRowsForList(p.rows, dateStr || undefined)
-          };
-        }) : undefined;
-        
-        return { ...prev, headers: newHeaders, rows: newRows, periods: newPeriods };
-      });
-      setHasPendingChanges(false);
+      applyPullData(payload);
     } catch (e) {
-      console.error("Failed to pull updates", e);
+      if (import.meta.env.DEV) {
+        console.error("Failed to pull updates", e);
+      }
     } finally {
       setIsPulling(false);
     }
+  };
+
+  const confirmRemovedAttendees = (action: 'remove' | 'keepCustom') => {
+    if (pendingPullDataRef.current) {
+      applyPullData(pendingPullDataRef.current, action);
+      pendingPullDataRef.current = null;
+    }
+    setRemovedAttendeesPrompt(null);
+  };
+
+  const cancelRemovedAttendees = () => {
+    if (pendingPullDataRef.current) {
+      applyPullData(pendingPullDataRef.current, 'keepCustom');
+      pendingPullDataRef.current = null;
+    }
+    setRemovedAttendeesPrompt(null);
   };
 
   return {
@@ -1034,6 +1167,10 @@ export function useFormState(exerciseId: number | string | undefined, contextId:
     hasLocalChanges,
     hasConflicts,
     hasPendingChanges,
+    pendingChanges,
+    removedAttendeesPrompt,
+    confirmRemovedAttendees,
+    cancelRemovedAttendees,
     ...memberMaps,
     highlightChanges,
     setHighlightChanges,

@@ -60,14 +60,31 @@ api.interceptors.response.use(
 );
 
 export interface WhoAmIResponse {
+  id?: number;
+  name?: string;
+  username?: string;
+  email?: string;
   members: {
+    id?: number;
     owner: {
       id: number;
       resourceType: string;
       title: string;
     };
     name: string;
+    role?: {
+      id?: number;
+      title?: string;
+      permission?: string;
+      resourceType?: string;
+    };
+    position?: string;
+    status?: string;
+    permission?: string;
+    permissions?: string[] | Record<string, any>;
+    [key: string]: any;
   }[];
+  [key: string]: any;
 }
 
 export interface Activity {
@@ -158,6 +175,40 @@ export interface Member {
   pager?: { phone?: string };
 }
 
+export const logCurrentUserInfo = async (): Promise<void> => {
+  if (!import.meta.env.DEV) return;
+  try {
+    const token = localStorage.getItem('d4h_token');
+    if (!token) return;
+    const res = await api.get<WhoAmIResponse>('/whoami');
+    console.groupCollapsed(
+      '%c[D4H Auth] Logged-in User & Permissions',
+      'color: #0d2d66; font-weight: bold; background: #e0f2fe; padding: 2px 6px; border-radius: 4px;'
+    );
+    if (Array.isArray(res.data?.members)) {
+      res.data.members.forEach((m, idx) => {
+        console.log(`Team/Context #${idx + 1} (${m.owner?.title || 'Unknown'} - ID: ${m.owner?.id}):`, {
+          memberName: m.name,
+          memberId: m.id,
+          role: m.role,
+          permission: m.permission,
+          permissions: m.permissions,
+          position: m.position,
+          status: m.status,
+          owner: m.owner,
+        });
+      });
+    } else {
+      console.log('WhoAmI Full Response:', res.data);
+    }
+    console.groupEnd();
+  } catch (err) {
+    if (import.meta.env.DEV) {
+      console.warn('[D4H Auth] Could not fetch user permissions info:', err);
+    }
+  }
+};
+
 export const verifyTokenAndGetContext = async (): Promise<{ contextId: number; title: string }> => {
   const res = await api.get<WhoAmIResponse>('/whoami');
   const member = res.data.members.find((m) => m.owner.resourceType === 'Team');
@@ -168,6 +219,11 @@ export const verifyTokenAndGetContext = async (): Promise<{ contextId: number; t
   // Pre-cache fallback subdomain based on title so we avoid unnecessary network calls
   const fallbackSubdomain = member.owner.title.toLowerCase().trim().replace(/[^a-z0-9]/g, '');
   localStorage.setItem('d4h_team_subdomain', fallbackSubdomain);
+
+  // Log user info and permissions in dev mode
+  if (import.meta.env.DEV) {
+    logCurrentUserInfo();
+  }
 
   return { contextId: member.owner.id, title: member.owner.title };
 };

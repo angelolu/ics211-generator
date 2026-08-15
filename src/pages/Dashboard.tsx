@@ -30,7 +30,7 @@ import {
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { formatActivityLocation, getActivities } from '../api/d4h';
+import { formatActivityLocation, getActivities, logCurrentUserInfo } from '../api/d4h';
 import type { Activity } from '../api/d4h';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 
@@ -103,6 +103,12 @@ export function Dashboard() {
       loadLocalRosters();
     }
   }, [viewMode, contextId]);
+
+  useEffect(() => {
+    if (contextId) {
+      logCurrentUserInfo();
+    }
+  }, [contextId]);
 
   useEffect(() => {
     localStorage.setItem('fitnessqual_d4h_activities_view', activitiesView);

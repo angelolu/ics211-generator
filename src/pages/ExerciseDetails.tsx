@@ -39,6 +39,7 @@ import { ICS211AForm } from '../components/ICS211AForm';
 import { ICS211BForm } from '../components/ICS211BForm';
 import { ICS211Form } from '../components/ICS211Form';
 import { ConfirmDialog } from '../components/ConfirmDialog';
+import { RemovedAttendeesModal } from '../components/RemovedAttendeesModal';
 import { useFormState, type FormHeaderData, type FormRowData } from '../hooks/useFormState';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { calculateHours } from '../utils/time';
@@ -139,6 +140,7 @@ export function ExerciseDetails() {
 
   const {
     formState, isLoading, isPulling, hasLocalChanges, hasConflicts, hasPendingChanges,
+    pendingChanges, removedAttendeesPrompt, confirmRemovedAttendees, cancelRemovedAttendees,
     medicalMap, technicalMap, positionsMap, idsMap, statusMap, rolesMap, emailMap,
     highlightChanges, setHighlightChanges, updateHeaderCell, updateRowCell,
     addBlankRows, resetChanges, fixConflicts, pullData, removeRow, restoreRow,
@@ -435,8 +437,31 @@ export function ExerciseDetails() {
                       </button>
                     </Tooltip.Trigger>
                     <Tooltip.Portal>
-                      <Tooltip.Content className="tooltip-content" side="top" sideOffset={5}>
-                        {hasPendingChanges ? 'Pending changes available in D4H. Click to sync.' : 'Pull latest attendee data from D4H'}
+                      <Tooltip.Content className="tooltip-content" side="top" sideOffset={5} style={{ maxWidth: 320, textAlign: 'left' }}>
+                        {hasPendingChanges ? (
+                          <div>
+                            <div style={{ fontWeight: 700, marginBottom: 4, color: 'var(--gold-6)' }}>
+                              Pending changes in D4H:
+                            </div>
+                            {pendingChanges.length > 0 ? (
+                              <ul style={{ margin: 0, paddingLeft: 16, fontSize: '0.75rem', lineHeight: 1.4, maxHeight: 180, overflowY: 'auto' }}>
+                                {pendingChanges.slice(0, 10).map((change, idx) => (
+                                  <li key={idx} style={{ marginBottom: 2 }}>{change}</li>
+                                ))}
+                                {pendingChanges.length > 10 && (
+                                  <li style={{ fontStyle: 'italic', opacity: 0.8 }}>+ {pendingChanges.length - 10} more...</li>
+                                )}
+                              </ul>
+                            ) : (
+                              <div style={{ fontSize: '0.75rem' }}>Changes detected in D4H.</div>
+                            )}
+                            <div style={{ marginTop: 6, fontSize: '0.7rem', opacity: 0.8, borderTop: '1px solid rgba(255,255,255,0.15)', paddingTop: 4 }}>
+                              Click to sync
+                            </div>
+                          </div>
+                        ) : (
+                          'Pull latest attendee data from D4H'
+                        )}
                       </Tooltip.Content>
                     </Tooltip.Portal>
                   </Tooltip.Root>
@@ -885,6 +910,17 @@ export function ExerciseDetails() {
           description="This will permanently delete the roster and all its attendee data. This cannot be undone."
           confirmLabel="Delete Roster"
           onConfirm={handleDeleteLocalRoster}
+        />
+
+        {/* ── Attendees Removed on D4H Dialog ───────────── */}
+        <RemovedAttendeesModal
+          open={!!removedAttendeesPrompt}
+          onOpenChange={(open) => {
+            if (!open) cancelRemovedAttendees();
+          }}
+          count={removedAttendeesPrompt?.count || 0}
+          onKeepAsCustom={() => confirmRemovedAttendees('keepCustom')}
+          onRemoveRows={() => confirmRemovedAttendees('remove')}
         />
 
         <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>

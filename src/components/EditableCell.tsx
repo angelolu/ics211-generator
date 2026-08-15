@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import type { CellState } from '../hooks/useFormState';
 
 interface EditableCellProps {
@@ -24,14 +24,26 @@ export const EditableCell = ({
   cell, onChange, highlightChanges, className = '', onContextMenuEvent, rowActions, errorMsg, successMsg
 }: EditableCellProps) => {
   const [localValue, setLocalValue] = useState(() => getRawValue(cell?.value));
+  const divRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    setLocalValue(getRawValue(cell?.value));
+    const raw = getRawValue(cell?.value);
+    setLocalValue(raw);
+    if (divRef.current && divRef.current.innerText.replace(/\r?\n$/, '') !== raw) {
+      divRef.current.innerText = raw;
+    }
   }, [cell?.value]);
 
   const handleBlur = (e: React.FocusEvent<HTMLDivElement>) => {
-    const text = e.target.innerText;
-    if (text !== cell.value) {
+    let text = e.currentTarget.innerText;
+    if (text === '\n') {
+      text = '';
+    } else {
+      text = text.replace(/\r?\n$/, '');
+    }
+
+    const currentVal = getRawValue(cell?.value);
+    if (text !== currentVal) {
       onChange(text);
     }
   };
@@ -95,6 +107,7 @@ export const EditableCell = ({
 
   return (
     <div
+      ref={divRef}
       className={`w-full h-full outline-none overflow-hidden ${bgClass} ${className}`}
       contentEditable
       suppressContentEditableWarning
