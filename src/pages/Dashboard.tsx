@@ -1011,15 +1011,18 @@ function CalendarView({
                         )}
 
                         {isAttending && (
-                          <UserCheck
-                            size={12}
-                            strokeWidth={2.5}
-                            style={{
-                              flexShrink: 0,
-                              opacity: 0.9,
-                            }}
+                          <span
                             title={isPast ? 'Attended' : 'Attending'}
-                          />
+                            style={{ display: 'inline-flex', alignItems: 'center', flexShrink: 0 }}
+                          >
+                            <UserCheck
+                              size={12}
+                              strokeWidth={2.5}
+                              style={{
+                                opacity: 0.9,
+                              }}
+                            />
+                          </span>
                         )}
 
                         <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: 600 }}>
