@@ -339,6 +339,21 @@ export function useFormState(exerciseId: number | string | undefined, contextId:
 
                   const detectedChanges: string[] = [];
 
+                  const formatDiff = (label: string, originalVal?: string | null, newVal?: string | null) => {
+                    const orig = (originalVal || '').trim();
+                    const next = (newVal || '').trim();
+                    if (orig && next) {
+                      return `${label}: ${orig} → ${next}`;
+                    }
+                    if (next) {
+                      return `${label}: ${next}`;
+                    }
+                    if (orig) {
+                      return `${label}: ${orig} → none`;
+                    }
+                    return `${label}: updated`;
+                  };
+
                   if (freshExercise) {
                     const remoteExName = freshExercise.referenceDescription || freshExercise.description || 'Unnamed Exercise';
                     const remoteDate = freshExercise.startsAt ? format(new Date(freshExercise.startsAt), 'MM/dd/yyyy') : '';
@@ -346,16 +361,16 @@ export function useFormState(exerciseId: number | string | undefined, contextId:
                     const remoteCheckInLoc = formatActivityLocation(freshExercise);
 
                     if (currentForm.headers.exerciseName && currentForm.headers.exerciseName.originalValue !== remoteExName) {
-                      detectedChanges.push(`Exercise Name: "${currentForm.headers.exerciseName.originalValue || ''}" → "${remoteExName}"`);
+                      detectedChanges.push(formatDiff('Exercise Name', currentForm.headers.exerciseName.originalValue, remoteExName));
                     }
                     if (currentForm.headers.date && currentForm.headers.date.originalValue !== remoteDate) {
-                      detectedChanges.push(`Date: "${currentForm.headers.date.originalValue || ''}" → "${remoteDate}"`);
+                      detectedChanges.push(formatDiff('Date', currentForm.headers.date.originalValue, remoteDate));
                     }
                     if (currentForm.headers.exerciseNumber && currentForm.headers.exerciseNumber.originalValue !== remoteExNumber) {
-                      detectedChanges.push(`Exercise #: "${currentForm.headers.exerciseNumber.originalValue || ''}" → "${remoteExNumber}"`);
+                      detectedChanges.push(formatDiff('Exercise #', currentForm.headers.exerciseNumber.originalValue, remoteExNumber));
                     }
                     if (currentForm.headers.checkInLocation && currentForm.headers.checkInLocation.originalValue !== remoteCheckInLoc) {
-                      detectedChanges.push(`Check-In Location: "${currentForm.headers.checkInLocation.originalValue || ''}" → "${remoteCheckInLoc}"`);
+                      detectedChanges.push(formatDiff('Check-In Location', currentForm.headers.checkInLocation.originalValue, remoteCheckInLoc));
                     }
                   }
 
@@ -365,19 +380,33 @@ export function useFormState(exerciseId: number | string | undefined, contextId:
                   const currentMemberMap = new Map(currentMemberRows.map(r => [r.memberId!, r]));
 
                   // Check for added attendees
+                  const addedNames: string[] = [];
+                  const seenAddedIds = new Set<number>();
                   for (const att of attData) {
-                    if (!currentMemberMap.has(att.member.id)) {
+                    if (!currentMemberMap.has(att.member.id) && !seenAddedIds.has(att.member.id)) {
+                      seenAddedIds.add(att.member.id);
                       const memberDetail = memberData.find(m => m.id === att.member.id);
-                      detectedChanges.push(`Added attendee: ${memberDetail?.name || att.member.name || `Member #${att.member.id}`}`);
+                      const name = memberDetail?.name || att.member.name || `Member #${att.member.id}`;
+                      if (name) addedNames.push(name.trim());
                     }
+                  }
+                  if (addedNames.length > 0) {
+                    detectedChanges.push(`Added ${addedNames.join(', ')}`);
                   }
 
                   // Check for removed attendees
+                  const removedNames: string[] = [];
+                  const seenRemovedIds = new Set<number>();
                   const remoteMemberIds = new Set(attData.map(a => a.member.id));
                   for (const row of currentMemberRows) {
-                    if (row.memberId && !remoteMemberIds.has(row.memberId)) {
-                      detectedChanges.push(`Removed attendee: ${row.cells.name.value || row.cells.name.originalValue || `Member #${row.memberId}`}`);
+                    if (row.memberId && !remoteMemberIds.has(row.memberId) && !seenRemovedIds.has(row.memberId)) {
+                      seenRemovedIds.add(row.memberId);
+                      const name = row.cells.name.value || row.cells.name.originalValue || `Member #${row.memberId}`;
+                      if (name) removedNames.push(name.trim());
                     }
+                  }
+                  if (removedNames.length > 0) {
+                    detectedChanges.push(`Removed ${removedNames.join(', ')}`);
                   }
 
                   // Check for attendee cell modifications
@@ -395,21 +424,56 @@ export function useFormState(exerciseId: number | string | undefined, contextId:
                       const remoteTimeOut = isTodayOrFuture ? '' : formatD4HTime(endIso);
                       const remoteHours = isTodayOrFuture ? '' : calculateD4HHours(startIso, endIso, remoteTimeIn, remoteTimeOut, att.hours, att.duration);
 
-                      const memberDisplayName = row.cells.name.value || remoteName;
+                      const memberDisplayName = (row.cells.name.value || row.cells.name.originalValue || remoteName).trim();
                       if (row.cells.name.originalValue !== remoteName) {
-                        detectedChanges.push(`Attendee "${memberDisplayName}" name: "${row.cells.name.originalValue}" → "${remoteName}"`);
+                        detectedChanges.push(formatDiff(`Updated ${memberDisplayName}'s name`, row.cells.name.originalValue, remoteName));
                       }
                       if (row.cells.phone.originalValue !== remotePhone) {
-                        detectedChanges.push(`Attendee "${memberDisplayName}" phone: "${row.cells.phone.originalValue}" → "${remotePhone}"`);
+                        detectedChanges.push(formatDiff(`Updated ${memberDisplayName}'s phone`, row.cells.phone.originalValue, remotePhone));
                       }
-                      if (row.cells.timeIn.originalValue !== remoteTimeIn) {
-                        detectedChanges.push(`Attendee "${memberDisplayName}" time in: "${row.cells.timeIn.originalValue || '(none)'}" → "${remoteTimeIn || '(none)'}"`);
-                      }
-                      if (row.cells.timeOut.originalValue !== remoteTimeOut) {
-                        detectedChanges.push(`Attendee "${memberDisplayName}" time out: "${row.cells.timeOut.originalValue || '(none)'}" → "${remoteTimeOut || '(none)'}"`);
-                      }
-                      if (row.cells.hours.originalValue !== remoteHours) {
-                        detectedChanges.push(`Attendee "${memberDisplayName}" hours: "${row.cells.hours.originalValue || '(none)'}" → "${remoteHours || '(none)'}"`);
+
+                      const changedIn = row.cells.timeIn.originalValue !== remoteTimeIn;
+                      const changedOut = row.cells.timeOut.originalValue !== remoteTimeOut;
+                      const changedHours = row.cells.hours.originalValue !== remoteHours;
+                      const timeChangesCount = (changedIn ? 1 : 0) + (changedOut ? 1 : 0) + (changedHours ? 1 : 0);
+
+                      if (timeChangesCount > 1) {
+                        const parts: string[] = [];
+                        if (changedIn && changedOut) {
+                          if (remoteTimeIn && remoteTimeOut) {
+                            parts.push(`${remoteTimeIn} - ${remoteTimeOut}`);
+                          } else if (remoteTimeIn) {
+                            parts.push(`in ${remoteTimeIn}`);
+                          } else if (remoteTimeOut) {
+                            parts.push(`out ${remoteTimeOut}`);
+                          }
+                        } else if (changedIn) {
+                          if (remoteTimeIn) {
+                            parts.push(`in ${remoteTimeIn}`);
+                          }
+                        } else if (changedOut) {
+                          if (remoteTimeOut) {
+                            parts.push(`out ${remoteTimeOut}`);
+                          }
+                        }
+
+                        if (changedHours && remoteHours) {
+                          parts.push(remoteHours);
+                        }
+
+                        if (parts.length > 0) {
+                          detectedChanges.push(`Updated ${memberDisplayName}'s time to ${parts.join(', ')}`);
+                        } else {
+                          detectedChanges.push(`Updated ${memberDisplayName}'s time to none`);
+                        }
+                      } else if (timeChangesCount === 1) {
+                        if (changedIn) {
+                          detectedChanges.push(formatDiff(`Updated ${memberDisplayName}'s time in`, row.cells.timeIn.originalValue, remoteTimeIn));
+                        } else if (changedOut) {
+                          detectedChanges.push(formatDiff(`Updated ${memberDisplayName}'s time out`, row.cells.timeOut.originalValue, remoteTimeOut));
+                        } else if (changedHours) {
+                          detectedChanges.push(formatDiff(`Updated ${memberDisplayName}'s hours`, row.cells.hours.originalValue, remoteHours));
+                        }
                       }
                     }
                   }

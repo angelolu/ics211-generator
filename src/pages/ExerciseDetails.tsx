@@ -57,10 +57,6 @@ const TYPE_LABELS: Record<string, string> = {
   exercise: 'Exercise', event: 'Event', incident: 'Incident', local: 'Local',
 };
 
-const TYPE_ICONS: Record<string, string> = {
-  exercise: '🏋️', event: '📅', incident: '🚨', local: '💾',
-};
-
 /** Config for optional column toggles (data-driven dropdown) */
 const COLUMN_TOGGLES: { key: keyof ColumnFlags; label: string; icon: LucideIcon; className?: string }[] = [
   { key: 'showPhone', label: 'Phone numbers', icon: Phone },
@@ -358,7 +354,6 @@ export function ExerciseDetails() {
                     color: 'rgba(220,195,148,0.9)',
                     border: '1px solid rgba(220,195,148,0.25)',
                   }}>
-                    <span style={{ fontSize: 13 }}>{TYPE_ICONS[activityType]}</span>
                     {TYPE_LABELS[activityType]}
                   </span>
                   <span style={{
@@ -441,10 +436,10 @@ export function ExerciseDetails() {
                         {hasPendingChanges ? (
                           <div>
                             <div style={{ fontWeight: 700, marginBottom: 4, color: 'var(--gold-6)' }}>
-                              Pending changes in D4H:
+                              Pending changes from D4H:
                             </div>
                             {pendingChanges.length > 0 ? (
-                              <ul style={{ margin: 0, paddingLeft: 16, fontSize: '0.75rem', lineHeight: 1.4, maxHeight: 180, overflowY: 'auto' }}>
+                              <ul style={{ margin: 0, padding: 0, listStyle: 'none', fontSize: '0.75rem', lineHeight: 1.4, maxHeight: 180, overflowY: 'auto' }}>
                                 {pendingChanges.slice(0, 10).map((change, idx) => (
                                   <li key={idx} style={{ marginBottom: 2 }}>{change}</li>
                                 ))}
@@ -455,9 +450,6 @@ export function ExerciseDetails() {
                             ) : (
                               <div style={{ fontSize: '0.75rem' }}>Changes detected in D4H.</div>
                             )}
-                            <div style={{ marginTop: 6, fontSize: '0.7rem', opacity: 0.8, borderTop: '1px solid rgba(255,255,255,0.15)', paddingTop: 4 }}>
-                              Click to sync
-                            </div>
                           </div>
                         ) : (
                           'Pull latest attendee data from D4H'
@@ -484,7 +476,7 @@ export function ExerciseDetails() {
                           background: 'var(--amber-9)', display: 'inline-block',
                         }} />
                       )}
-                      Changes
+                      Options
                       <ChevronDown size={13} />
                     </button>
                   </DropdownMenu.Trigger>
@@ -496,29 +488,6 @@ export function ExerciseDetails() {
                       sideOffset={6}
                       style={{ padding: 4, minWidth: 220 }}
                     >
-                      {/* Highlight toggle */}
-                      <DropdownMenu.Item
-                        onSelect={(e) => { e.preventDefault(); setHighlightChanges(!highlightChanges); }}
-                        style={{
-                          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                          padding: '8px 12px', borderRadius: 6, cursor: 'pointer', outline: 'none',
-                          fontSize: '0.875rem', color: 'var(--slate-12)',
-                        }}
-                        className="select-item"
-                      >
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                          <Highlighter size={14} style={{ color: 'var(--slate-9)' }} />
-                          Highlight changes
-                        </div>
-                        <Switch.Root
-                          checked={highlightChanges}
-                          className="switch-root"
-                          style={{ pointerEvents: 'none' }}
-                        >
-                          <Switch.Thumb className="switch-thumb" />
-                        </Switch.Root>
-                      </DropdownMenu.Item>
-
                       <DropdownMenu.Item
                         onSelect={(e) => { e.preventDefault(); setShowCalcHours(!showCalcHours); }}
                         style={{
@@ -584,18 +553,47 @@ export function ExerciseDetails() {
 
                       <DropdownMenu.Separator style={{ height: 1, background: 'var(--slate-5)', margin: '4px 0' }} />
 
+                      <DropdownMenu.Label style={{ padding: '6px 12px 2px', fontSize: '0.75rem', fontWeight: 600, color: 'var(--slate-10)' }}>
+                        Local Changes
+                      </DropdownMenu.Label>
+
+                      {/* Highlight toggle */}
+                      <DropdownMenu.Item
+                        onSelect={(e) => { e.preventDefault(); setHighlightChanges(!highlightChanges); }}
+                        style={{
+                          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                          padding: '8px 12px', borderRadius: 6, cursor: 'pointer', outline: 'none',
+                          fontSize: '0.875rem', color: 'var(--slate-12)',
+                        }}
+                        className="select-item"
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <Highlighter size={14} style={{ color: 'var(--slate-9)' }} />
+                          Highlight
+                        </div>
+                        <Switch.Root
+                          checked={highlightChanges}
+                          className="switch-root"
+                          style={{ pointerEvents: 'none' }}
+                        >
+                          <Switch.Thumb className="switch-thumb" />
+                        </Switch.Root>
+                      </DropdownMenu.Item>
+
                       <DropdownMenu.Item
                         className="select-item"
                         onSelect={() => setShowResetModal(true)}
                         disabled={!hasLocalChanges && !hasConflicts}
                         style={{
+                          display: 'flex', alignItems: 'center', gap: 8,
                           borderRadius: 6, padding: '8px 12px', outline: 'none',
+                          fontSize: '0.875rem', color: 'var(--slate-12)',
                           opacity: (!hasLocalChanges && !hasConflicts) ? 0.4 : 1,
                           cursor: (!hasLocalChanges && !hasConflicts) ? 'not-allowed' : 'pointer',
                         }}
                       >
                         <RotateCcw size={14} style={{ color: 'var(--slate-9)' }} />
-                        Reset local changes
+                        Reset
                       </DropdownMenu.Item>
                     </DropdownMenu.Content>
                   </DropdownMenu.Portal>

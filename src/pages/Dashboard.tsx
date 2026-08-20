@@ -3,6 +3,7 @@ import * as ToggleGroup from '@radix-ui/react-toggle-group';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import {
   addMonths,
+  differenceInCalendarDays,
   eachDayOfInterval,
   endOfMonth,
   endOfWeek,
@@ -10,8 +11,10 @@ import {
   isSameDay,
   isSameMonth,
   isToday,
+  startOfDay,
   startOfMonth,
   startOfWeek,
+  subDays,
   subMonths,
 } from 'date-fns';
 import {
@@ -26,13 +29,15 @@ import {
   LogIn,
   LogOut,
   MapPin,
+  UserCheck,
   Users,
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { formatActivityLocation, getActivities, logCurrentUserInfo } from '../api/d4h';
+import { formatActivityLocation, getActivities, getCurrentUserAttendingActivityIds, logCurrentUserInfo } from '../api/d4h';
 import type { Activity } from '../api/d4h';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
+import { ActivityPopover } from '../components/ActivityPopover';
 
 type FilterType = 'all' | 'exercise' | 'event' | 'incident';
 
@@ -47,12 +52,6 @@ const TYPE_LABELS: Record<string, string> = {
   exercise: 'Exercise',
   event: 'Event',
   incident: 'Incident',
-};
-
-const TYPE_ICONS: Record<string, string> = {
-  exercise: '🏋️',
-  event: '📅',
-  incident: '🚨',
 };
 
 export function Dashboard() {
@@ -85,6 +84,7 @@ export function Dashboard() {
     return (saved === 'calendar' || saved === 'list') ? saved : 'calendar';
   });
   const [currentMonth, setCurrentMonth] = useState<Date>(new Date());
+  const [attendingActivityIds, setAttendingActivityIds] = useState<Set<number>>(new Set());
 
   const loadLocalRosters = () => {
     try {
@@ -143,17 +143,24 @@ export function Dashboard() {
         const gridStart = startOfWeek(startOfMonth(targetMonth));
         const gridEnd = endOfWeek(endOfMonth(targetMonth));
         options = {
-          startsAfter: gridStart.toISOString(),
+          startsAfter: subMonths(gridStart, 1).toISOString(),
           startsBefore: gridEnd.toISOString(),
         };
       }
 
-      const data = await getActivities(parseInt(contextId, 10), options);
+      const contextIdNum = parseInt(contextId, 10);
+      const data = await getActivities(contextIdNum, options);
       setActivities(data);
+
+      getCurrentUserAttendingActivityIds(contextIdNum, options)
+        .then(ids => setAttendingActivityIds(ids))
+        .catch(() => {});
     } catch (err: any) {
       if (err.response?.status === 401 || err.response?.status === 403) {
         localStorage.removeItem('d4h_token');
         localStorage.removeItem('d4h_context_id');
+        localStorage.removeItem('d4h_member_id');
+        localStorage.removeItem('d4h_member_name');
         navigate('/login');
       } else {
         setError('Failed to load activities. Please try again.');
@@ -332,7 +339,7 @@ export function Dashboard() {
                       className="toggle-item"
                       style={{ display: 'flex', alignItems: 'center', gap: 6 }}
                     >
-                      {type !== 'all' && <span style={{ fontSize: 13 }}>{TYPE_ICONS[type]}</span>}
+                      {type !== 'all' && <div className={`type-dot type-dot-${type}`} />}
                       <span>{type === 'all' ? 'All' : `${TYPE_LABELS[type]}s`}</span>
                       <span style={{
                         background: 'var(--slate-5)', color: 'var(--slate-11)',
@@ -354,56 +361,11 @@ export function Dashboard() {
             )}
           </div>
 
-          {/* Month Navigation Control Bar for Activities */}
-          {viewMode === 'activities' && activitiesView === 'calendar' && (
-            <div style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              gap: 12,
-              marginBottom: 20,
-              padding: '10px 16px',
-              background: 'white',
-              border: '1px solid var(--slate-3)',
-              borderRadius: 10,
-              boxShadow: '0 1px 3px rgba(6,27,68,0.04)',
-            }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <button
-                  className="btn btn-secondary btn-sm"
-                  onClick={() => { setCurrentMonth(prev => subMonths(prev, 1)); setCurrentPage(1); }}
-                  title="Previous Month"
-                  style={{ padding: '5px 8px' }}
-                >
-                  <ChevronLeft size={16} />
-                </button>
-                <h3 style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--slate-12)', minWidth: 140, textAlign: 'center' }}>
-                  {format(currentMonth, 'MMMM yyyy')}
-                </h3>
-                <button
-                  className="btn btn-secondary btn-sm"
-                  onClick={() => { setCurrentMonth(prev => addMonths(prev, 1)); setCurrentPage(1); }}
-                  title="Next Month"
-                  style={{ padding: '5px 8px' }}
-                >
-                  <ChevronRight size={16} />
-                </button>
-                <button
-                  className="btn btn-ghost btn-sm"
-                  onClick={() => { setCurrentMonth(new Date()); setCurrentPage(1); }}
-                  style={{ fontSize: '0.8125rem', fontWeight: 600, color: 'var(--navy-7)' }}
-                >
-                  Today
-                </button>
-              </div>
-            </div>
-          )}
-
           {/* Content */}
           {viewMode === 'activities' ? (
             isLoading ? (
               activitiesView === 'calendar' ? (
-                <CalendarSkeleton />
+                <CalendarSkeleton currentMonth={currentMonth} />
               ) : (
                 <div style={{ display: 'grid', gap: 12 }}>
                   {[...Array(6)].map((_, i) => (
@@ -423,6 +385,14 @@ export function Dashboard() {
                 <p style={{ color: 'var(--red-11)', fontWeight: 600, marginBottom: 16 }}>{error}</p>
                 <button className="btn btn-secondary" onClick={() => load()}>Try Again</button>
               </div>
+            ) : activitiesView === 'calendar' ? (
+              <CalendarView
+                activities={filtered}
+                currentMonth={currentMonth}
+                onMonthChange={(newMonth) => { setCurrentMonth(newMonth); setCurrentPage(1); }}
+                attendingActivityIds={attendingActivityIds}
+                onSelectActivity={(activity) => navigate(`/exercise/${activity.id}`, { state: { exercise: activity } })}
+              />
             ) : filtered.length === 0 ? (
               <div className="card" style={{ padding: 64, textAlign: 'center' }}>
                 <div style={{
@@ -440,12 +410,6 @@ export function Dashboard() {
                   Nothing scheduled for this month. Check back later or navigate to another month.
                 </p>
               </div>
-            ) : activitiesView === 'calendar' ? (
-              <CalendarView
-                activities={filtered}
-                currentMonth={currentMonth}
-                onSelectActivity={(activity) => navigate(`/exercise/${activity.id}`, { state: { exercise: activity } })}
-              />
             ) : (
               <>
                 <div style={{ display: 'grid', gap: 10 }}>
@@ -585,9 +549,57 @@ export function Dashboard() {
   );
 }
 
-function CalendarSkeleton() {
+function CalendarSkeleton({ currentMonth }: { currentMonth?: Date }) {
+  const isCurrentMonth = currentMonth ? isSameMonth(currentMonth, new Date()) : true;
   return (
     <div className="card" style={{ overflow: 'hidden', border: '1px solid var(--slate-3)' }}>
+      {/* Unified Month Header */}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          padding: '12px 18px',
+          background: 'white',
+          borderBottom: '1px solid var(--slate-3)',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            <button
+              className="btn btn-secondary btn-sm"
+              disabled
+              style={{ padding: '5px 8px', height: 30, opacity: 0.6 }}
+            >
+              <ChevronLeft size={16} />
+            </button>
+            <button
+              className="btn btn-secondary btn-sm"
+              disabled
+              style={{ padding: '5px 8px', height: 30, opacity: 0.6 }}
+            >
+              <ChevronRight size={16} />
+            </button>
+          </div>
+          {currentMonth ? (
+            <h3 style={{ fontSize: '1.0625rem', fontWeight: 700, color: 'var(--slate-12)', margin: 0, paddingLeft: 4, lineHeight: 1, display: 'flex', alignItems: 'center' }}>
+              {format(currentMonth, 'MMMM yyyy')}
+            </h3>
+          ) : (
+            <div className="skeleton" style={{ width: 140, height: 20, borderRadius: 4 }} />
+          )}
+          {!isCurrentMonth && (
+            <button
+              className="btn btn-secondary btn-sm"
+              disabled
+              style={{ height: 30, padding: '0 12px', fontSize: '0.8125rem', fontWeight: 600, opacity: 0.6, marginLeft: 6 }}
+            >
+              Today
+            </button>
+          )}
+        </div>
+      </div>
+
       {/* Weekday headers */}
       <div style={{
         display: 'grid',
@@ -614,36 +626,39 @@ function CalendarSkeleton() {
         ))}
       </div>
 
-      {/* Grid of skeleton days */}
-      <div style={{
-        display: 'grid',
-        gridTemplateColumns: 'repeat(7, minmax(0, 1fr))',
-        gap: 1,
-        background: 'var(--slate-3)',
-      }}>
-        {[...Array(35)].map((_, i) => (
+      {/* Grid of skeleton week rows */}
+      <div>
+        {[...Array(5)].map((_, weekIdx) => (
           <div
-            key={i}
+            key={weekIdx}
             style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(7, minmax(0, 1fr))',
               minHeight: 110,
-              minWidth: 0,
-              overflow: 'hidden',
+              borderBottom: weekIdx === 4 ? 'none' : '1px solid var(--slate-3)',
               background: 'white',
-              padding: '8px',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 6,
             }}
           >
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <div className="skeleton" style={{ width: 22, height: 22, borderRadius: '50%' }} />
-            </div>
-            {i % 3 === 0 && (
-              <div className="skeleton" style={{ height: 20, width: '85%', borderRadius: 6 }} />
-            )}
-            {i % 5 === 0 && (
-              <div className="skeleton" style={{ height: 20, width: '65%', borderRadius: 6 }} />
-            )}
+            {[...Array(7)].map((_, dayIdx) => (
+              <div
+                key={dayIdx}
+                style={{
+                  borderRight: dayIdx === 6 ? 'none' : '1px solid var(--slate-3)',
+                  padding: '8px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 6,
+                }}
+              >
+                <div className="skeleton" style={{ width: 22, height: 22, borderRadius: '50%' }} />
+                {(weekIdx + dayIdx) % 3 === 0 && (
+                  <div className="skeleton" style={{ height: 20, width: '85%', borderRadius: 6, marginTop: 4 }} />
+                )}
+                {(weekIdx + dayIdx) % 5 === 0 && (
+                  <div className="skeleton" style={{ height: 20, width: '65%', borderRadius: 6 }} />
+                )}
+              </div>
+            ))}
           </div>
         ))}
       </div>
@@ -654,20 +669,119 @@ function CalendarSkeleton() {
 function CalendarView({
   activities,
   currentMonth,
+  onMonthChange,
+  attendingActivityIds,
   onSelectActivity,
 }: {
   activities: Activity[];
   currentMonth: Date;
+  onMonthChange: (date: Date) => void;
+  attendingActivityIds?: Set<number>;
   onSelectActivity: (activity: Activity) => void;
 }) {
+  const [hoveredActivityId, setHoveredActivityId] = useState<number | null>(null);
   const monthStart = startOfMonth(currentMonth);
   const monthEnd = endOfMonth(currentMonth);
   const startDate = startOfWeek(monthStart);
   const endDate = endOfWeek(monthEnd);
   const days = eachDayOfInterval({ start: startDate, end: endDate });
 
+  // Split days into weeks (7 days each)
+  const weeks: Date[][] = [];
+  for (let i = 0; i < days.length; i += 7) {
+    weeks.push(days.slice(i, i + 7));
+  }
+
+  // Precompute normalized dates for each activity
+  const normalizedActivities = activities.map(activity => {
+    const rawStart = new Date(activity.startsAt);
+    const rawEnd = activity.endsAt ? new Date(activity.endsAt) : rawStart;
+    const start = isNaN(rawStart.getTime()) ? new Date() : rawStart;
+    let end = isNaN(rawEnd.getTime()) || rawEnd < start ? start : rawEnd;
+
+    const startDay = startOfDay(start);
+    let endDay = startOfDay(end);
+
+    // If event ends at midnight (00:00:00) and spans across multiple days, treat endDay as previous day
+    if (
+      end.getHours() === 0 &&
+      end.getMinutes() === 0 &&
+      end.getSeconds() === 0 &&
+      !isSameDay(start, end)
+    ) {
+      endDay = subDays(endDay, 1);
+    }
+    if (endDay < startDay) {
+      endDay = startDay;
+    }
+
+    return {
+      activity,
+      rawStart: start,
+      rawEnd: end,
+      startDay,
+      endDay,
+    };
+  });
+
+  const isCurrentMonth = isSameMonth(currentMonth, new Date());
+
   return (
     <div className="card" style={{ overflow: 'hidden', border: '1px solid var(--slate-3)' }}>
+      {/* Unified Month Header */}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          padding: '12px 18px',
+          background: 'white',
+          borderBottom: '1px solid var(--slate-3)',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            <button
+              className="btn btn-secondary btn-sm"
+              onClick={() => onMonthChange(subMonths(currentMonth, 1))}
+              title="Previous Month"
+              style={{ padding: '5px 8px', height: 30 }}
+            >
+              <ChevronLeft size={16} />
+            </button>
+            <button
+              className="btn btn-secondary btn-sm"
+              onClick={() => onMonthChange(addMonths(currentMonth, 1))}
+              title="Next Month"
+              style={{ padding: '5px 8px', height: 30 }}
+            >
+              <ChevronRight size={16} />
+            </button>
+          </div>
+
+          <h3 style={{ fontSize: '1.0625rem', fontWeight: 700, color: 'var(--slate-12)', margin: 0, paddingLeft: 4, lineHeight: 1, display: 'flex', alignItems: 'center' }}>
+            {format(currentMonth, 'MMMM yyyy')}
+          </h3>
+
+          {!isCurrentMonth && (
+            <button
+              className="btn btn-secondary btn-sm"
+              onClick={() => onMonthChange(new Date())}
+              style={{
+                height: 30,
+                padding: '0 12px',
+                fontSize: '0.8125rem',
+                fontWeight: 600,
+                color: 'var(--navy-9)',
+                marginLeft: 6,
+              }}
+            >
+              Today
+            </button>
+          )}
+        </div>
+      </div>
+
       {/* Weekday headers */}
       <div style={{
         display: 'grid',
@@ -694,93 +808,225 @@ function CalendarView({
         ))}
       </div>
 
-      {/* Grid of days */}
-      <div style={{
-        display: 'grid',
-        gridTemplateColumns: 'repeat(7, minmax(0, 1fr))',
-        gap: 1,
-        background: 'var(--slate-3)',
-      }}>
-        {days.map(day => {
-          const inMonth = isSameMonth(day, currentMonth);
-          const today = isToday(day);
-          const dayActivities = activities.filter(a => isSameDay(new Date(a.startsAt), day));
+      {/* Stack of week rows */}
+      <div>
+        {weeks.map((week, weekIdx) => {
+          const weekStart = startOfDay(week[0]);
+          const weekEnd = startOfDay(week[6]);
+
+          // Find activities that intersect with this week
+          interface Segment {
+            activity: Activity;
+            rawStart: Date;
+            rawEnd: Date;
+            startCol: number;
+            endCol: number;
+            span: number;
+            isStart: boolean;
+            isEnd: boolean;
+            slot: number;
+          }
+
+          const segments: Segment[] = [];
+
+          normalizedActivities.forEach(({ activity, rawStart, rawEnd, startDay, endDay }) => {
+            // Check intersection with the current week
+            if (startDay <= weekEnd && endDay >= weekStart) {
+              const startCol = startDay < weekStart ? 0 : differenceInCalendarDays(startDay, weekStart);
+              const endCol = endDay > weekEnd ? 6 : differenceInCalendarDays(endDay, weekStart);
+              const span = Math.max(1, endCol - startCol + 1);
+              const isStart = isSameDay(startDay, week[startCol]);
+              const isEnd = isSameDay(endDay, week[endCol]);
+
+              segments.push({
+                activity,
+                rawStart,
+                rawEnd,
+                startCol,
+                endCol,
+                span,
+                isStart,
+                isEnd,
+                slot: 0,
+              });
+            }
+          });
+
+          // Sort segments: longer span first, then earlier startCol, then earlier rawStart, then ID
+          segments.sort((a, b) => {
+            if (b.span !== a.span) return b.span - a.span;
+            if (a.startCol !== b.startCol) return a.startCol - b.startCol;
+            if (a.rawStart.getTime() !== b.rawStart.getTime()) {
+              return a.rawStart.getTime() - b.rawStart.getTime();
+            }
+            return a.activity.id - b.activity.id;
+          });
+
+          // Allocate slots so no overlapping columns share the same vertical slot
+          const occupiedSlots: boolean[][] = [];
+          segments.forEach(segment => {
+            let slot = 0;
+            while (true) {
+              if (!occupiedSlots[slot]) {
+                occupiedSlots[slot] = new Array(7).fill(false);
+              }
+              let free = true;
+              for (let c = segment.startCol; c <= segment.endCol; c++) {
+                if (occupiedSlots[slot][c]) {
+                  free = false;
+                  break;
+                }
+              }
+              if (free) {
+                for (let c = segment.startCol; c <= segment.endCol; c++) {
+                  occupiedSlots[slot][c] = true;
+                }
+                segment.slot = slot;
+                break;
+              }
+              slot++;
+            }
+          });
+
+          const maxSlots = segments.length > 0 ? Math.max(...segments.map(s => s.slot)) + 1 : 0;
+          const isLastWeek = weekIdx === weeks.length - 1;
 
           return (
             <div
-              key={day.toISOString()}
+              key={week[0].toISOString()}
               style={{
-                minHeight: 110,
-                minWidth: 0,
-                overflow: 'hidden',
-                background: today ? '#F0F7FF' : inMonth ? 'white' : 'var(--slate-1)',
-                padding: '8px',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 6,
-                opacity: inMonth ? 1 : 0.55,
-                transition: 'background 0.15s ease',
+                position: 'relative',
+                minHeight: Math.max(110, 36 + maxSlots * 28 + 8),
+                borderBottom: isLastWeek ? 'none' : '1px solid var(--slate-3)',
+                background: 'white',
               }}
             >
-              {/* Day Number Header */}
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <span
-                  style={{
-                    fontSize: '0.8125rem',
-                    fontWeight: today ? 800 : inMonth ? 600 : 400,
-                    color: today ? 'white' : inMonth ? 'var(--slate-12)' : 'var(--slate-8)',
-                    background: today ? 'var(--navy-9)' : 'transparent',
-                    width: 24,
-                    height: 24,
-                    borderRadius: '50%',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                  }}
-                >
-                  {format(day, 'd')}
-                </span>
-                {dayActivities.length > 0 && (
-                  <span style={{
-                    fontSize: '0.6875rem',
-                    color: 'var(--slate-9)',
-                    fontWeight: 700,
-                    background: 'var(--slate-3)',
-                    padding: '1px 6px',
-                    borderRadius: 10,
-                  }}>
-                    {dayActivities.length}
-                  </span>
-                )}
-              </div>
-
-              {/* Event Pills */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 4, flex: 1, overflowY: 'auto', maxHeight: 110 }}>
-                {dayActivities.map(activity => {
-                  const title = activity.referenceDescription || activity.description || `Unnamed ${activity.type}`;
-                  const location = formatActivityLocation(activity);
+              {/* Day cells background & day number header */}
+              <div
+                style={{
+                  position: 'absolute',
+                  inset: 0,
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(7, minmax(0, 1fr))',
+                  pointerEvents: 'none',
+                }}
+              >
+                {week.map((day, dayIdx) => {
+                  const inMonth = isSameMonth(day, currentMonth);
+                  const today = isToday(day);
+                  const isLastCol = dayIdx === 6;
 
                   return (
                     <div
-                      key={`${activity.type}-${activity.id}`}
-                      onClick={() => onSelectActivity(activity)}
-                      title={`${TYPE_LABELS[activity.type]}: ${title}${location ? ' @ ' + location : ''}`}
-                      className={`calendar-event-pill calendar-event-pill-${activity.type}`}
+                      key={day.toISOString()}
                       style={{
-                        padding: '4px 6px',
-                        borderRadius: 6,
-                        fontSize: '0.75rem',
-                        cursor: 'pointer',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: 5,
-                        lineHeight: 1.25,
+                        height: '100%',
+                        borderRight: isLastCol ? 'none' : '1px solid var(--slate-3)',
+                        background: today ? '#F0F7FF' : inMonth ? 'white' : 'var(--slate-1)',
+                        padding: '8px',
+                        boxSizing: 'border-box',
+                        opacity: inMonth ? 1 : 0.55,
                       }}
                     >
-                      <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontWeight: 500 }}>
-                        {title}
-                      </span>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                        <span
+                          style={{
+                            fontSize: '0.8125rem',
+                            fontWeight: today ? 800 : inMonth ? 600 : 400,
+                            color: today ? 'white' : inMonth ? 'var(--slate-12)' : 'var(--slate-8)',
+                            background: today ? 'var(--navy-9)' : 'transparent',
+                            width: 24,
+                            height: 24,
+                            borderRadius: '50%',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                          }}
+                        >
+                          {format(day, 'd')}
+                        </span>
+                      </div>
                     </div>
+                  );
+                })}
+              </div>
+
+              {/* Events Grid Layer */}
+              <div
+                style={{
+                  position: 'relative',
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(7, minmax(0, 1fr))',
+                  gridAutoRows: '24px',
+                  rowGap: '4px',
+                  paddingTop: '34px',
+                  paddingBottom: '8px',
+                  paddingLeft: '2px',
+                  paddingRight: '2px',
+                  zIndex: 1,
+                }}
+              >
+                {segments.map(segment => {
+                  const { activity, startCol, span, isStart, isEnd, slot } = segment;
+                  const title = activity.referenceDescription || activity.description || `Unnamed ${activity.type}`;
+                  const isAttending = attendingActivityIds?.has(activity.id) ?? false;
+                  const isPast = (activity.endsAt ? new Date(activity.endsAt) : new Date(activity.startsAt)) < new Date();
+
+                  return (
+                    <ActivityPopover
+                      key={`${activity.type}-${activity.id}-${startCol}`}
+                      activity={activity}
+                      isAttending={isAttending}
+                      onOpenRoster={onSelectActivity}
+                    >
+                      <div
+                        onClick={() => onSelectActivity(activity)}
+                        onMouseEnter={() => setHoveredActivityId(activity.id)}
+                        onMouseLeave={() => setHoveredActivityId(null)}
+                        className={`calendar-event-pill calendar-event-pill-${activity.type} ${hoveredActivityId === activity.id ? 'is-hovered' : ''}`}
+                        style={{
+                          gridColumn: `${startCol + 1} / span ${span}`,
+                          gridRow: slot + 1,
+                          margin: '0 2px',
+                          padding: '0 8px',
+                          height: 24,
+                          borderRadius: isStart && isEnd ? 6 : isStart ? '6px 0 0 6px' : isEnd ? '0 6px 6px 0' : 0,
+                          fontSize: '0.75rem',
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 6,
+                          lineHeight: 1,
+                          whiteSpace: 'nowrap',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          fontWeight: 500,
+                          boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
+                        }}
+                      >
+                        {!isStart && (
+                          <span style={{ fontSize: '0.75rem', opacity: 0.7, flexShrink: 0, display: 'inline-flex', alignItems: 'center' }}>
+                            ↳
+                          </span>
+                        )}
+
+                        {isAttending && (
+                          <UserCheck
+                            size={12}
+                            strokeWidth={2.5}
+                            style={{
+                              flexShrink: 0,
+                              opacity: 0.9,
+                            }}
+                            title={isPast ? 'Attended' : 'Attending'}
+                          />
+                        )}
+
+                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: 600 }}>
+                          {title}
+                        </span>
+                      </div>
+                    </ActivityPopover>
                   );
                 })}
               </div>

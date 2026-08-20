@@ -652,11 +652,15 @@
 /* ── Calendar Event Pills ────────────────────────────── */
 .calendar-event-pill {
   transition: all 0.15s ease;
+  user-select: none;
+  box-sizing: border-box;
 }
 
-.calendar-event-pill:hover {
+.calendar-event-pill:hover,
+.calendar-event-pill.is-hovered {
   transform: translateY(-1px);
-  box-shadow: 0 2px 6px rgba(6, 27, 68, 0.12);
+  box-shadow: 0 2px 6px rgba(6, 27, 68, 0.16);
+  z-index: 10;
 }
 
 .calendar-event-pill-exercise {
@@ -665,7 +669,8 @@
   border: 1px solid var(--navy-2);
 }
 
-.calendar-event-pill-exercise:hover {
+.calendar-event-pill-exercise:hover,
+.calendar-event-pill-exercise.is-hovered {
   background: var(--navy-2);
 }
 
@@ -675,7 +680,8 @@
   border: 1px solid var(--teal-3);
 }
 
-.calendar-event-pill-event:hover {
+.calendar-event-pill-event:hover,
+.calendar-event-pill-event.is-hovered {
   background: var(--teal-3);
 }
 
@@ -685,8 +691,36 @@
   border: 1px solid var(--red-6);
 }
 
-.calendar-event-pill-incident:hover {
+.calendar-event-pill-incident:hover,
+.calendar-event-pill-incident.is-hovered {
   background: var(--red-6);
+}
+
+/* ── Activity Popover & Leaflet Map ──────────────────── */
+.popover-content {
+  animation-duration: 200ms;
+  animation-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+  will-change: transform, opacity;
+}
+
+.popover-content[data-state='open'] {
+  animation-name: slideUpAndFade;
+}
+
+@keyframes slideUpAndFade {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.custom-map-pin {
+  background: transparent !important;
+  border: none !important;
 }
 
 /* ── Print ────────────────────────────────────────────── */

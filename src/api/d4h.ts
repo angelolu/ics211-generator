@@ -216,6 +216,13 @@ export const verifyTokenAndGetContext = async (): Promise<{ contextId: number; t
     throw new Error("No Team context found for this token.");
   }
 
+  if (member.id) {
+    localStorage.setItem('d4h_member_id', member.id.toString());
+  }
+  if (member.name) {
+    localStorage.setItem('d4h_member_name', member.name);
+  }
+
   // Pre-cache fallback subdomain based on title so we avoid unnecessary network calls
   const fallbackSubdomain = member.owner.title.toLowerCase().trim().replace(/[^a-z0-9]/g, '');
   localStorage.setItem('d4h_team_subdomain', fallbackSubdomain);
@@ -226,6 +233,96 @@ export const verifyTokenAndGetContext = async (): Promise<{ contextId: number; t
   }
 
   return { contextId: member.owner.id, title: member.owner.title };
+};
+
+export interface CurrentUserMemberInfo {
+  memberId: number;
+  name?: string;
+}
+
+export const getCurrentUserMemberInfo = async (contextId?: number | string): Promise<CurrentUserMemberInfo | null> => {
+  const cachedMemberId = localStorage.getItem('d4h_member_id');
+  const cachedMemberName = localStorage.getItem('d4h_member_name');
+  if (cachedMemberId) {
+    const id = parseInt(cachedMemberId, 10);
+    if (!isNaN(id)) {
+      return { memberId: id, name: cachedMemberName || undefined };
+    }
+  }
+
+  try {
+    const res = await api.get<WhoAmIResponse>('/whoami');
+    const targetContextId = contextId ? Number(contextId) : null;
+    const member = targetContextId
+      ? res.data.members?.find(m => m.owner.id === targetContextId)
+      : res.data.members?.find(m => m.owner.resourceType === 'Team') || res.data.members?.[0];
+
+    if (member && member.id) {
+      localStorage.setItem('d4h_member_id', member.id.toString());
+      if (member.name) {
+        localStorage.setItem('d4h_member_name', member.name);
+      }
+      return { memberId: member.id, name: member.name };
+    }
+  } catch (e) {
+    if (import.meta.env.DEV) {
+      console.warn('[D4H Auth] Failed to get current user info:', e);
+    }
+  }
+  return null;
+};
+
+// In-memory cache for current user attendance lists (15m TTL)
+const userAttendanceCache = new Map<string, { ids: Set<number>; cachedAt: number }>();
+
+export const getCurrentUserAttendingActivityIds = async (
+  contextId: number,
+  options?: { startsAfter?: string; startsBefore?: string; forceRefresh?: boolean }
+): Promise<Set<number>> => {
+  const userInfo = await getCurrentUserMemberInfo(contextId);
+  if (!userInfo?.memberId) return new Set();
+
+  const cacheKey = `attending_${contextId}_${userInfo.memberId}_${options?.startsAfter || ''}_${options?.startsBefore || ''}`;
+
+  if (!options?.forceRefresh) {
+    const cached = userAttendanceCache.get(cacheKey);
+    if (cached && Date.now() - cached.cachedAt < ACTIVITIES_CACHE_TTL_MS) {
+      return cached.ids;
+    }
+  }
+
+  return dedupe(cacheKey, async () => {
+    try {
+      const params: Record<string, any> = {
+        member_id: userInfo.memberId,
+        size: 250,
+      };
+      if (options?.startsAfter) params.starts_after = options.startsAfter;
+      if (options?.startsBefore) params.starts_before = options.startsBefore;
+
+      const res = await api.get<{ results: any[] }>(`/team/${contextId}/attendance`, { params });
+      const results = res.data?.results || [];
+
+      const attendingIds = new Set<number>();
+      results.forEach((rec) => {
+        const status = (rec.status || '').toUpperCase();
+        if (status === 'ATTENDING' || status === 'CONFIRMED') {
+          const actId = rec.activity_id || rec.activity?.id || rec.id;
+          if (typeof actId === 'number') {
+            attendingIds.add(actId);
+          }
+        }
+      });
+
+      userAttendanceCache.set(cacheKey, { ids: attendingIds, cachedAt: Date.now() });
+      return attendingIds;
+    } catch (e) {
+      if (import.meta.env.DEV) {
+        console.warn('[D4H API] Failed to fetch current user attendance:', e);
+      }
+      return new Set<number>();
+    }
+  });
 };
 
 export async function fetchAndCacheTeamSubdomain(_contextId?: string | number): Promise<string | null> {
