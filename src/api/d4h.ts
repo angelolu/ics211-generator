@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { safeSetLocalStorageItem } from './storage';
 
 const BASE_URL = 'https://api.team-manager.us.d4h.com/v3';
 const CACHE_TTL_MS = 60 * 60 * 1000; // 60 minutes for members and qualifications (per AGENTS.md)
@@ -657,6 +658,21 @@ export const getAttendees = async (contextId: number, exerciseId: number): Promi
   });
 };
 
+export const getSynchronousMember = (contextId: number, memberId: number): Member | null => {
+  if (!contextId || !memberId) return null;
+  const cacheKey = `d4h_members_cache_${contextId}`;
+  try {
+    const raw = localStorage.getItem(cacheKey);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && parsed[memberId]?.data) {
+        return parsed[memberId].data;
+      }
+    }
+  } catch { }
+  return null;
+};
+
 export const getMemberDetails = async (contextId: number, memberIds: number[]): Promise<Member[]> => {
   if (memberIds.length === 0) return [];
 
@@ -738,6 +754,96 @@ export const getMemberDetails = async (contextId: number, memberIds: number[]): 
     const resolvedResults = memberIds.map(id => memberCache[id]?.data).filter((m): m is Member => !!m);
     console.log(`[D4H Member Details] Requested ${memberIds.length} members, resolved ${resolvedResults.length}:`, resolvedResults);
     return resolvedResults;
+  });
+};
+
+const memberImageMemoryCache = new Map<number, string | null>();
+const AVATAR_CACHE_PREFIX = 'd4h_avatar_cache_';
+const AVATAR_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours (per AGENTS.md)
+
+function downscaleBlobToDataUrl(blob: Blob, targetSize = 64): Promise<string> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    const objUrl = URL.createObjectURL(blob);
+    img.onload = () => {
+      URL.revokeObjectURL(objUrl);
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width = targetSize;
+        canvas.height = targetSize;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          resolve(objUrl);
+          return;
+        }
+        const minDim = Math.min(img.naturalWidth, img.naturalHeight);
+        const sx = (img.naturalWidth - minDim) / 2;
+        const sy = (img.naturalHeight - minDim) / 2;
+        ctx.drawImage(img, sx, sy, minDim, minDim, 0, 0, targetSize, targetSize);
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.78);
+        resolve(dataUrl);
+      } catch {
+        resolve(objUrl);
+      }
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(objUrl);
+      resolve('');
+    };
+    img.src = objUrl;
+  });
+}
+
+export const getSynchronousMemberImageUrl = (contextId: number, memberId: number): string | null => {
+  if (!contextId || !memberId) return null;
+  if (memberImageMemoryCache.has(memberId)) {
+    return memberImageMemoryCache.get(memberId) || null;
+  }
+  const cacheKey = `${AVATAR_CACHE_PREFIX}${contextId}_${memberId}`;
+  try {
+    const cached = localStorage.getItem(cacheKey);
+    if (cached) {
+      const parsed = JSON.parse(cached);
+      if (parsed && typeof parsed.timestamp === 'number' && Date.now() - parsed.timestamp < AVATAR_CACHE_TTL_MS) {
+        memberImageMemoryCache.set(memberId, parsed.data);
+        return parsed.data;
+      }
+    }
+  } catch { }
+  return null;
+};
+
+export const getMemberImageUrl = async (contextId: number, memberId: number): Promise<string | null> => {
+  if (!contextId || !memberId) return null;
+
+  // 1. Check synchronous cache first
+  const syncCached = getSynchronousMemberImageUrl(contextId, memberId);
+  if (syncCached) return syncCached;
+  if (memberImageMemoryCache.has(memberId) && memberImageMemoryCache.get(memberId) === null) {
+    return null; // Known negative cache
+  }
+
+  const cacheKey = `${AVATAR_CACHE_PREFIX}${contextId}_${memberId}`;
+
+  return dedupe(`getMemberImageUrl_${contextId}_${memberId}`, async () => {
+    try {
+      const res = await api.get(`/team/${contextId}/members/${memberId}/image`, {
+        responseType: 'blob',
+      });
+      if (res.status === 200 && res.data && res.data.size > 0) {
+        const compressedDataUrl = await downscaleBlobToDataUrl(res.data, 64);
+        if (compressedDataUrl) {
+          memberImageMemoryCache.set(memberId, compressedDataUrl);
+          safeSetLocalStorageItem(cacheKey, JSON.stringify({ data: compressedDataUrl, timestamp: Date.now() }));
+          return compressedDataUrl;
+        }
+      }
+    } catch {
+      // Negative caching for 404 / no image to prevent repeated network requests
+      memberImageMemoryCache.set(memberId, null);
+      safeSetLocalStorageItem(cacheKey, JSON.stringify({ data: null, timestamp: Date.now() }));
+    }
+    return null;
   });
 };
 

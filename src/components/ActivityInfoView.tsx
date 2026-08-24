@@ -9,7 +9,7 @@ import {
   Users,
 } from 'lucide-react';
 import type { Activity, Attendee, Member } from '../api/d4h';
-import { formatActivityLocation } from '../api/d4h';
+import { formatActivityLocation, getMemberImageUrl, getSynchronousMemberImageUrl } from '../api/d4h';
 import { ActivityMiniMap } from './ActivityMiniMap';
 import { ActivityWeatherConditions } from './ActivityWeatherConditions';
 import { cleanDescription } from './ActivityPopover';
@@ -29,12 +29,106 @@ interface ActivityInfoViewProps {
   onAttendanceChanged?: () => void;
 }
 
+const MemberTileAvatar: React.FC<{
+  contextId: number;
+  memberId?: number;
+  name: string;
+}> = ({ contextId, memberId, name }) => {
+  const [imgUrl, setImgUrl] = React.useState<string | null>(() => {
+    return memberId ? getSynchronousMemberImageUrl(contextId, memberId) : null;
+  });
+  const [loaded, setLoaded] = React.useState<boolean>(() => {
+    return memberId ? !!getSynchronousMemberImageUrl(contextId, memberId) : false;
+  });
+
+  React.useEffect(() => {
+    let isCancelled = false;
+    if (!contextId || !memberId) return;
+
+    getMemberImageUrl(contextId, memberId).then((url) => {
+      if (!isCancelled && url) {
+        setImgUrl(url);
+      }
+    });
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [contextId, memberId]);
+
+  const initials = React.useMemo(() => {
+    if (!name) return '??';
+    const parts = name.trim().split(/\s+/).filter(Boolean);
+    if (parts.length === 0) return '??';
+    if (parts.length === 1) return parts[0].substring(0, 2).toUpperCase();
+    return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+  }, [name]);
+
+  return (
+    <div
+      style={{
+        width: 64,
+        height: 64,
+        minWidth: 64,
+        minHeight: 64,
+        maxWidth: 64,
+        maxHeight: 64,
+        position: 'relative',
+        background: 'var(--slate-3)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        overflow: 'hidden',
+        borderTopLeftRadius: 9,
+        borderBottomLeftRadius: 9,
+        flexShrink: 0,
+      }}
+    >
+      {imgUrl ? (
+        <img
+          src={imgUrl}
+          alt={name}
+          onLoad={() => setLoaded(true)}
+          style={{
+            width: 64,
+            height: 64,
+            objectFit: 'cover',
+            display: 'block',
+            opacity: loaded ? 1 : 0,
+            transition: 'opacity 0.2s ease',
+          }}
+        />
+      ) : null}
+
+      {(!imgUrl || !loaded) && (
+        <div
+          style={{
+            position: 'absolute',
+            inset: 0,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            background: 'var(--slate-4)',
+            color: 'var(--slate-10)',
+            fontWeight: 700,
+            fontSize: '0.9375rem',
+            letterSpacing: '-0.02em',
+          }}
+        >
+          {initials}
+        </div>
+      )}
+    </div>
+  );
+};
+
 export const ActivityInfoView: React.FC<ActivityInfoViewProps> = ({
   activity,
   attendees,
   members,
   onSwitchToMap,
 }) => {
+  const contextId = parseInt(localStorage.getItem('d4h_context_id') || '0', 10);
   const startDate = activity?.startsAt ? new Date(activity.startsAt) : new Date();
   const endDate = activity?.endsAt ? new Date(activity.endsAt) : startDate;
   const isMultiDay = !isNaN(startDate.getTime()) && !isNaN(endDate.getTime()) && !isSameDay(startDate, endDate);
@@ -234,7 +328,7 @@ export const ActivityInfoView: React.FC<ActivityInfoViewProps> = ({
             }}
           >
             {attendees.map((att, idx) => {
-              const memberObj = memberMap.get(att.member?.id);
+              const memberObj = memberMap.get(att.member?.id || 0);
               const name = att.member?.name || memberObj?.name || 'Unknown Member';
               const roleTitle = att.role?.title || memberObj?.role?.title || memberObj?.position;
 
@@ -242,27 +336,70 @@ export const ActivityInfoView: React.FC<ActivityInfoViewProps> = ({
                 <div
                   key={att.id || idx}
                   style={{
-                    padding: '12px 14px',
                     background: 'var(--slate-1)',
                     border: '1px solid var(--slate-3)',
                     borderRadius: 10,
                     display: 'flex',
-                    flexDirection: 'column',
-                    gap: 6,
+                    alignItems: 'center',
+                    minHeight: 64,
+                    height: 64,
+                    overflow: 'hidden',
+                    transition: 'all 0.15s ease',
                   }}
                 >
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-                    <span style={{ fontWeight: 700, fontSize: '0.875rem', color: 'var(--slate-12)' }}>
+                  <MemberTileAvatar
+                    contextId={contextId}
+                    memberId={att.member?.id || memberObj?.id}
+                    name={name}
+                  />
+
+                  <div
+                    style={{
+                      padding: '10px 14px',
+                      flex: 1,
+                      minWidth: 0,
+                      display: 'flex',
+                      flexDirection: 'column',
+                      justifyContent: 'center',
+                      gap: 4,
+                    }}
+                  >
+                    <span
+                      style={{
+                        fontWeight: 700,
+                        fontSize: '0.875rem',
+                        color: 'var(--slate-12)',
+                        whiteSpace: 'nowrap',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                      }}
+                    >
                       {name}
                     </span>
-                  </div>
 
-                  {roleTitle && (
-                    <div style={{ fontSize: '0.75rem', color: 'var(--slate-10)', display: 'flex', alignItems: 'center', gap: 4 }}>
-                      <Shield size={12} style={{ color: 'var(--slate-8)' }} />
-                      <span>{roleTitle}</span>
-                    </div>
-                  )}
+                    {roleTitle && (
+                      <div
+                        style={{
+                          fontSize: '0.75rem',
+                          color: 'var(--slate-10)',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 4,
+                        }}
+                      >
+                        <Shield size={12} style={{ color: 'var(--slate-8)', flexShrink: 0 }} />
+                        <span
+                          style={{
+                            whiteSpace: 'nowrap',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                          }}
+                        >
+                          {roleTitle}
+                        </span>
+                      </div>
+                    )}
+                  </div>
                 </div>
               );
             })}

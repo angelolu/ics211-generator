@@ -117,64 +117,8 @@ function compactGeometry(geometry: any): any {
   };
 }
 
-export function safeSetLocalStorageItem(key: string, value: string): void {
-  try {
-    localStorage.setItem(key, value);
-  } catch {
-    // Quota exceeded: prune expired entries first
-    try {
-      const now = Date.now();
-      const allKeys = Object.keys(localStorage);
-      for (const k of allKeys) {
-        if (k.startsWith(DRIVING_CACHE_KEY_PREFIX) || k.startsWith(GEOCODE_CACHE_KEY_PREFIX)) {
-          const item = localStorage.getItem(k);
-          if (item) {
-            try {
-              const parsed = JSON.parse(item);
-              if (parsed && typeof parsed.timestamp === 'number' && now - parsed.timestamp >= LOCATION_CACHE_TTL_MS) {
-                localStorage.removeItem(k);
-              }
-            } catch {
-              localStorage.removeItem(k);
-            }
-          }
-        }
-      }
-
-      // Retry after expired eviction
-      localStorage.setItem(key, value);
-    } catch {
-      // If still full, prune oldest driving route caches (LRU eviction)
-      try {
-        const routeKeys: { key: string; timestamp: number }[] = [];
-        for (const k of Object.keys(localStorage)) {
-          if (k.startsWith(DRIVING_CACHE_KEY_PREFIX)) {
-            const item = localStorage.getItem(k);
-            if (item) {
-              try {
-                const parsed = JSON.parse(item);
-                routeKeys.push({ key: k, timestamp: parsed.timestamp || 0 });
-              } catch {
-                localStorage.removeItem(k);
-              }
-            }
-          }
-        }
-
-        // Sort oldest first and remove oldest half
-        routeKeys.sort((a, b) => a.timestamp - b.timestamp);
-        const removeCount = Math.max(1, Math.floor(routeKeys.length / 2));
-        for (let i = 0; i < removeCount; i++) {
-          localStorage.removeItem(routeKeys[i].key);
-        }
-
-        localStorage.setItem(key, value);
-      } catch {
-        // Fallback gracefully
-      }
-    }
-  }
-}
+import { safeSetLocalStorageItem } from './storage';
+export { safeSetLocalStorageItem };
 
 export async function geocodeAddress(addressText: string, customToken?: string): Promise<GeocodeResult | null> {
   const query = addressText.trim();
