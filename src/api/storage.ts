@@ -28,14 +28,114 @@ export function isProtectedStorageKey(key: string): boolean {
   return PROTECTED_KEY_PREFIXES.some((prefix) => key.startsWith(prefix));
 }
 
+export const CURRENT_STORAGE_VERSION = 2;
+const STORAGE_VERSION_KEY = 'fitnessqual_storage_version';
+
+/**
+ * Automatically migrate legacy data and purge obsolete, uncompressed, or expired
+ * cache entries created before the smart caching and quota safety engine.
+ */
+export function migrateLegacyStorage(): void {
+  try {
+    const savedVersion = parseInt(localStorage.getItem(STORAGE_VERSION_KEY) || '0', 10);
+
+    // Always prune expired entries on boot
+    pruneLocalStorage();
+
+    if (savedVersion >= CURRENT_STORAGE_VERSION) {
+      return; // Already up-to-date
+    }
+
+    console.log(`[Storage] Migrating legacy storage from version ${savedVersion} to ${CURRENT_STORAGE_VERSION}...`);
+
+    const allKeys = Object.keys(localStorage);
+    let cleanedCount = 0;
+
+    for (const key of allKeys) {
+      // Never touch protected roster, form, or auth data
+      if (isProtectedStorageKey(key)) continue;
+
+      // 1. Remove obsolete uncompressed routes from older versions
+      if (key.startsWith('mapbox_route_') || key.startsWith('mapbox_driving_route_')) {
+        localStorage.removeItem(key);
+        cleanedCount++;
+        continue;
+      }
+
+      // 2. Remove obsolete or unnormalized geocodes from older versions
+      if (key.startsWith('mapbox_geocode_') && !key.startsWith('mapbox_geocode_cache_')) {
+        localStorage.removeItem(key);
+        cleanedCount++;
+        continue;
+      }
+
+      // 3. Clean up any temporary or test fill keys
+      if (key.includes('stress_test') || key.includes('fill_') || key.includes('test_route_')) {
+        localStorage.removeItem(key);
+        cleanedCount++;
+        continue;
+      }
+
+      // 4. Compact unrounded coordinates in existing driving caches
+      if (key.startsWith('mapbox_driving_cache_')) {
+        try {
+          const raw = localStorage.getItem(key);
+          if (raw) {
+            const parsed = JSON.parse(raw);
+            if (parsed && parsed.data?.geometry?.coordinates) {
+              const coords = parsed.data.geometry.coordinates;
+              const needsRounding = coords.some((c: number[]) =>
+                c.some((num: number) => Math.abs(num - Math.round(num * 10000) / 10000) > 0.00001)
+              );
+              if (needsRounding) {
+                parsed.data.geometry.coordinates = coords.map((c: number[]) => [
+                  Math.round(c[0] * 10000) / 10000,
+                  Math.round(c[1] * 10000) / 10000,
+                ]);
+                localStorage.setItem(key, JSON.stringify(parsed));
+              }
+            }
+          }
+        } catch {
+          localStorage.removeItem(key);
+          cleanedCount++;
+        }
+      }
+
+      // 5. Clean up corrupted or stale avatar cache entries
+      if (key.startsWith('d4h_avatar_cache_')) {
+        try {
+          const raw = localStorage.getItem(key);
+          if (raw) {
+            const parsed = JSON.parse(raw);
+            // Avatars older than 7 days should be purged
+            if (!parsed?.timestamp || Date.now() - parsed.timestamp > 7 * 24 * 60 * 60 * 1000) {
+              localStorage.removeItem(key);
+              cleanedCount++;
+            }
+          }
+        } catch {
+          localStorage.removeItem(key);
+          cleanedCount++;
+        }
+      }
+    }
+
+    localStorage.setItem(STORAGE_VERSION_KEY, CURRENT_STORAGE_VERSION.toString());
+    console.log(`[Storage] Migration complete. Cleaned ${cleanedCount} legacy/stale entries.`);
+  } catch (err) {
+    console.error('[Storage] Error during storage migration:', err);
+  }
+}
+
 /**
  * Smart cache pruning strategy:
  * 1. Remove all expired cache entries (routes, geocodes, avatars, weather, etc.)
  * 2. If still full, evict oldest items in tiered LRU order:
- *    - Tier 1: mapbox_route_
+ *    - Tier 1: mapbox_driving_cache_
  *    - Tier 2: d4h_avatar_cache_
  *    - Tier 3: weather_cache_
- *    - Tier 4: mapbox_geocode_
+ *    - Tier 4: mapbox_geocode_cache_
  *    - Tier 5: d4h_activity_cache / d4h_quals_cache_
  * 
  * NEVER removes any protected roster or credential keys.
@@ -117,7 +217,7 @@ export function safeSetLocalStorageItem(key: string, value: string): boolean {
 
     // 2. Second attempt: Evict driving route cache (Tier 1: biggest footprint)
     try {
-      evictOldestCacheTier('mapbox_route_', 0.6);
+      evictOldestCacheTier('mapbox_driving_cache_', 0.7);
       localStorage.setItem(key, value);
       return true;
     } catch { }
@@ -132,7 +232,7 @@ export function safeSetLocalStorageItem(key: string, value: string): boolean {
     // 4. Fourth attempt: Evict weather & geocode caches (Tier 3 & 4)
     try {
       evictOldestCacheTier('weather_cache_', 0.7);
-      evictOldestCacheTier('mapbox_geocode_', 0.5);
+      evictOldestCacheTier('mapbox_geocode_cache_', 0.5);
       localStorage.setItem(key, value);
       return true;
     } catch { }

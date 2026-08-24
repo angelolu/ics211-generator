@@ -6,4 +6,21 @@ import tailwindcss from '@tailwindcss/vite'
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   base: process.env.GITHUB_REPOSITORY ? `/${process.env.GITHUB_REPOSITORY.split('/')[1]}/` : '/',
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes('mapbox-gl')) {
+            return 'vendor-mapbox';
+          }
+          if (id.includes('leaflet')) {
+            return 'vendor-leaflet';
+          }
+          if (id.includes('@radix-ui')) {
+            return 'vendor-radix';
+          }
+        },
+      },
+    },
+  },
 })

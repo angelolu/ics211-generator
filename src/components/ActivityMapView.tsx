@@ -22,11 +22,13 @@ import {
   Users,
   X,
 } from 'lucide-react';
+import { format, isSameDay } from 'date-fns';
 import type { Activity, Attendee, Member } from '../api/d4h';
-import { formatActivityLocation, getMemberLocationQuery, isMemberOutOfStateOrCountry } from '../api/d4h';
+import { formatActivityLocation, getActivityStreetAddress, getMemberLocationQuery, isMemberOutOfStateOrCountry } from '../api/d4h';
 import {
   getMapboxToken,
   geocodeAddress,
+  geocodeAddressesBatch,
   getDrivingRoute,
   getMultiStopDrivingRoute,
   calculateDistanceMiles,
@@ -59,6 +61,9 @@ interface PlottedMember {
   lat: number;
   lng: number;
   source: 'gps' | 'geocoded';
+  startsAt?: string;
+  endsAt?: string;
+  opDate?: string;
 }
 
 interface UnmappedMember {
@@ -70,6 +75,9 @@ interface UnmappedMember {
   role?: string;
   addressText?: string;
   reason?: string;
+  startsAt?: string;
+  endsAt?: string;
+  opDate?: string;
 }
 
 export interface CarpoolGroup {
@@ -282,22 +290,74 @@ export const ActivityMapView: React.FC<ActivityMapViewProps> = ({
     setDeletedCarpoolNotice(null);
   };
 
-  // Extract activity coordinates
-  let actLat: number | null = null;
-  let actLng: number | null = null;
-  if (
-    activity?.location?.coordinates &&
-    Array.isArray(activity.location.coordinates) &&
-    activity.location.coordinates.length >= 2
-  ) {
-    const [coordLng, coordLat] = activity.location.coordinates;
-    if (coordLat !== 0 || coordLng !== 0) {
-      actLat = coordLat;
-      actLng = coordLng;
-    }
-  }
-
+  const streetAddress = getActivityStreetAddress(activity || undefined);
   const locationText = formatActivityLocation(activity || undefined);
+
+  const fullActivityAddress = useMemo(() => {
+    if (!activity) return '';
+    const street = activity.address?.street?.trim();
+    const town = activity.address?.town?.trim();
+    const region = activity.address?.region?.trim();
+    const postcode = activity.address?.postcode?.trim();
+    if (!street || !/^\s*\d+[\w-]*\s+[A-Za-z]/i.test(street)) return '';
+    return [street, town, region, postcode].filter(Boolean).join(', ');
+  }, [activity]);
+
+  // Destination coordinates: geocodes specific street address when available, otherwise falls back to location coordinates
+  const [destCoords, setDestCoords] = useState<{ lat: number; lng: number } | null>(() => {
+    if (
+      activity?.location?.coordinates &&
+      Array.isArray(activity.location.coordinates) &&
+      activity.location.coordinates.length >= 2
+    ) {
+      const [coordLng, coordLat] = activity.location.coordinates;
+      if (coordLat !== 0 || coordLng !== 0) {
+        return { lat: coordLat, lng: coordLng };
+      }
+    }
+    return null;
+  });
+
+  useEffect(() => {
+    let isCancelled = false;
+    if (!fullActivityAddress || !mapboxToken) {
+      if (
+        activity?.location?.coordinates &&
+        Array.isArray(activity.location.coordinates) &&
+        activity.location.coordinates.length >= 2
+      ) {
+        const [coordLng, coordLat] = activity.location.coordinates;
+        if (coordLat !== 0 || coordLng !== 0) {
+          setDestCoords({ lat: coordLat, lng: coordLng });
+        }
+      }
+      return;
+    }
+
+    geocodeAddress(fullActivityAddress, mapboxToken).then((res) => {
+      if (!isCancelled) {
+        if (res) {
+          setDestCoords({ lat: res.lat, lng: res.lng });
+        } else if (
+          activity?.location?.coordinates &&
+          Array.isArray(activity.location.coordinates) &&
+          activity.location.coordinates.length >= 2
+        ) {
+          const [coordLng, coordLat] = activity.location.coordinates;
+          if (coordLat !== 0 || coordLng !== 0) {
+            setDestCoords({ lat: coordLat, lng: coordLng });
+          }
+        }
+      }
+    });
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [fullActivityAddress, mapboxToken, activity?.location?.coordinates]);
+
+  const actLat = destCoords?.lat ?? null;
+  const actLng = destCoords?.lng ?? null;
 
   // Map member lookup
   const memberMap = useMemo(() => {
@@ -318,39 +378,130 @@ export const ActivityMapView: React.FC<ActivityMapViewProps> = ({
     return map;
   }, [plottedMembers, unmappedMembers]);
 
-  // 1. Geocoding & coordinate extraction (350-mile cutoff)
+  const isMultiPeriod = useMemo(() => {
+    const start = activity?.startsAt || (activity as any)?.startDate;
+    const end = activity?.endsAt || (activity as any)?.endDate;
+    if (start && end) {
+      try {
+        const d1 = new Date(start);
+        const d2 = new Date(end);
+        if (!isNaN(d1.getTime()) && !isNaN(d2.getTime()) && !isSameDay(d1, d2)) {
+          return true;
+        }
+      } catch { }
+    }
+
+    const dates = new Set<string>();
+    attendees.forEach((a) => {
+      if (a.startsAt) {
+        try {
+          const d = new Date(a.startsAt);
+          if (!isNaN(d.getTime())) dates.add(format(d, 'yyyy-MM-dd'));
+        } catch { }
+      }
+    });
+    return dates.size > 1;
+  }, [activity, attendees]);
+
+  const activeAttendees = useMemo(() => {
+    const memberMapById = new Map<number, {
+      primaryAtt: Attendee;
+      allAtts: Attendee[];
+      earliestStartsAt?: string;
+      latestEndsAt?: string;
+      initialOpDate?: string;
+      allOpDates: string[];
+    }>();
+
+    attendees.forEach((att) => {
+      const memberId = att.member?.id;
+      if (!memberId) return;
+
+      let opDate: string | undefined;
+      if (att.startsAt) {
+        try {
+          const d = new Date(att.startsAt);
+          if (!isNaN(d.getTime())) {
+            opDate = format(d, 'yyyy-MM-dd');
+          }
+        } catch { }
+      }
+
+      if (!memberMapById.has(memberId)) {
+        memberMapById.set(memberId, {
+          primaryAtt: att,
+          allAtts: [att],
+          earliestStartsAt: att.startsAt,
+          latestEndsAt: att.endsAt,
+          initialOpDate: opDate,
+          allOpDates: opDate ? [opDate] : [],
+        });
+      } else {
+        const entry = memberMapById.get(memberId)!;
+        entry.allAtts.push(att);
+        if (opDate && !entry.allOpDates.includes(opDate)) {
+          entry.allOpDates.push(opDate);
+        }
+        if (att.startsAt && (!entry.earliestStartsAt || new Date(att.startsAt) < new Date(entry.earliestStartsAt))) {
+          entry.earliestStartsAt = att.startsAt;
+          entry.initialOpDate = opDate;
+        }
+        if (att.endsAt && (!entry.latestEndsAt || new Date(att.endsAt) > new Date(entry.latestEndsAt))) {
+          entry.latestEndsAt = att.endsAt;
+        }
+      }
+    });
+
+    return Array.from(memberMapById.values()).map((entry) => ({
+      ...entry.primaryAtt,
+      startsAt: entry.earliestStartsAt,
+      endsAt: entry.latestEndsAt,
+      _opDate: entry.initialOpDate,
+      _allOpDates: entry.allOpDates,
+      _shiftsCount: entry.allAtts.length,
+    }));
+  }, [attendees]);
+
+  // 1. Batch Geocoding & coordinate extraction (350-mile cutoff)
   useEffect(() => {
     let isCancelled = false;
 
     const processMembers = async () => {
       const plotted: PlottedMember[] = [];
       const unmapped: UnmappedMember[] = [];
-      const needsGeocode: { att: Attendee; m?: Member; name: string; memberId: number; initials: string; color: string; role?: string; addressText: string }[] = [];
+      const needsGeocode: { att: Attendee; m?: Member; name: string; memberId: number; initials: string; color: string; role?: string; addressText: string; opDate?: string }[] = [];
 
       console.log('[ActivityMapView] processMembers start:', {
-        attendeeCount: attendees.length,
+        attendeeCount: activeAttendees.length,
         memberMapSize: memberMap.size,
         hasMapboxToken: Boolean(mapboxToken),
         activityCoords: [actLat, actLng],
       });
 
       // If attendees exist but member profiles are still being fetched, wait for profiles before classifying
-      if (attendees.length > 0 && members.length === 0) {
+      if (activeAttendees.length > 0 && members.length === 0) {
         return;
       }
 
-      attendees.forEach((att, idx) => {
-        const m = memberMap.get(att.member?.id);
+      activeAttendees.forEach((att, idx) => {
+        const rawMemberId = att.member?.id;
+        const m = rawMemberId && memberMap ? memberMap.get(rawMemberId) : undefined;
         const name = att.member?.name || m?.name || 'Responding Member';
         const role = att.role?.title || m?.role?.title || m?.position;
-        const memberId = att.member?.id ?? idx;
+        const memberId = rawMemberId ?? idx;
         const color = getMemberColor(memberId, idx);
         const initials = getMemberInitials(name);
+        let opDate: string | undefined = (att as any)._opDate;
+        if (!opDate && att.startsAt) {
+          try {
+            opDate = format(new Date(att.startsAt), 'yyyy-MM-dd');
+          } catch { }
+        }
 
         // Check if member is out-of-state or international
         if (isMemberOutOfStateOrCountry(m)) {
           console.log(`[ActivityMapView] Member #${memberId} (${name}) is marked out-of-state/international.`);
-          unmapped.push({ attendeeId: att.id, memberId, name, initials, color, role, addressText: '', reason: 'Out of state or international' });
+          unmapped.push({ attendeeId: att.id, memberId, name, initials, color, role, addressText: '', reason: 'Out of state or international', startsAt: att.startsAt, endsAt: att.endsAt, opDate });
           return;
         }
 
@@ -371,14 +522,6 @@ export const ActivityMapView: React.FC<ActivityMapViewProps> = ({
           }
         }
 
-        console.log(`[ActivityMapView] Evaluating member #${memberId} (${name}):`, {
-          hasMemberData: Boolean(m),
-          addressText,
-          mLat,
-          mLng,
-          mLocation: m?.location,
-        });
-
         if (mLat != null && mLng != null) {
           const isTooFar =
             actLat != null &&
@@ -387,7 +530,7 @@ export const ActivityMapView: React.FC<ActivityMapViewProps> = ({
 
           if (isTooFar) {
             console.log(`[ActivityMapView] Member #${memberId} (${name}) GPS coords are > ${MAX_REASONABLE_DISTANCE_MILES} miles away.`);
-            unmapped.push({ attendeeId: att.id, memberId, name, initials, color, role, addressText: addressText || '', reason: 'Location exceeds max distance' });
+            unmapped.push({ attendeeId: att.id, memberId, name, initials, color, role, addressText: addressText || '', reason: 'Location exceeds max distance', startsAt: att.startsAt, endsAt: att.endsAt, opDate });
           } else {
             plotted.push({
               attendeeId: att.id,
@@ -400,54 +543,60 @@ export const ActivityMapView: React.FC<ActivityMapViewProps> = ({
               lat: mLat,
               lng: mLng,
               source: 'gps',
+              startsAt: att.startsAt,
+              endsAt: att.endsAt,
+              opDate,
             });
           }
         } else if (addressText) {
-          needsGeocode.push({ att, m, name, memberId, initials, color, role, addressText });
+          needsGeocode.push({ att, m, name, memberId, initials, color, role, addressText, opDate });
         } else {
           console.log(`[ActivityMapView] Member #${memberId} (${name}) has no GPS coordinates and no address text.`);
-          unmapped.push({ attendeeId: att.id, memberId, name, initials, color, role, addressText: '', reason: m ? 'No address or coordinates on file' : 'Member profile not loaded' });
+          unmapped.push({ attendeeId: att.id, memberId, name, initials, color, role, addressText: '', reason: m ? 'No address or coordinates on file' : 'Member profile not loaded', startsAt: att.startsAt, endsAt: att.endsAt, opDate });
         }
       });
 
-      // Geocode addresses with Mapbox Geocoding API if token is available
+      // Geocode addresses in parallel batch with Mapbox Geocoding API if token is available
       if (needsGeocode.length > 0 && mapboxToken) {
-        console.log(`[ActivityMapView] Starting geocoding for ${needsGeocode.length} members...`);
-        for (const item of needsGeocode) {
-          if (isCancelled) break;
-          const geocode = await geocodeAddress(item.addressText, mapboxToken);
-          if (geocode) {
-            const isTooFar =
-              actLat != null &&
-              actLng != null &&
-              calculateDistanceMiles(geocode.lat, geocode.lng, actLat, actLng) > MAX_REASONABLE_DISTANCE_MILES;
+        console.log(`[ActivityMapView] Starting batch geocoding for ${needsGeocode.length} members...`);
+        const batchResults = await geocodeAddressesBatch(needsGeocode.map((i) => i.addressText), mapboxToken);
 
-            if (isTooFar) {
-              console.log(`[ActivityMapView] Geocoded member #${item.memberId} (${item.name}) is > ${MAX_REASONABLE_DISTANCE_MILES} miles away.`);
-              unmapped.push({ attendeeId: item.att.id, memberId: item.memberId, name: item.name, initials: item.initials, color: item.color, role: item.role, addressText: item.addressText, reason: 'Location exceeds max distance' });
+        if (!isCancelled) {
+          needsGeocode.forEach((item) => {
+            const geocode = batchResults[item.addressText.trim()];
+            if (geocode) {
+              const isTooFar =
+                actLat != null &&
+                actLng != null &&
+                calculateDistanceMiles(geocode.lat, geocode.lng, actLat, actLng) > MAX_REASONABLE_DISTANCE_MILES;
+
+              if (isTooFar) {
+                unmapped.push({ attendeeId: item.att.id, memberId: item.memberId, name: item.name, initials: item.initials, color: item.color, role: item.role, addressText: item.addressText, reason: 'Location exceeds max distance', startsAt: item.att.startsAt, endsAt: item.att.endsAt, opDate: item.opDate });
+              } else {
+                plotted.push({
+                  attendeeId: item.att.id,
+                  memberId: item.memberId,
+                  name: item.name,
+                  initials: item.initials,
+                  color: item.color,
+                  role: item.role,
+                  addressText: item.addressText,
+                  lat: geocode.lat,
+                  lng: geocode.lng,
+                  source: 'geocoded',
+                  startsAt: item.att.startsAt,
+                  endsAt: item.att.endsAt,
+                  opDate: item.opDate,
+                });
+              }
             } else {
-              plotted.push({
-                attendeeId: item.att.id,
-                memberId: item.memberId,
-                name: item.name,
-                initials: item.initials,
-                color: item.color,
-                role: item.role,
-                addressText: item.addressText,
-                lat: geocode.lat,
-                lng: geocode.lng,
-                source: 'geocoded',
-              });
+              unmapped.push({ attendeeId: item.att.id, memberId: item.memberId, name: item.name, initials: item.initials, color: item.color, role: item.role, addressText: item.addressText, reason: 'Could not geocode address', startsAt: item.att.startsAt, endsAt: item.att.endsAt, opDate: item.opDate });
             }
-          } else {
-            console.warn(`[ActivityMapView] Geocode failed for member #${item.memberId} (${item.name}) address: "${item.addressText}"`);
-            unmapped.push({ attendeeId: item.att.id, memberId: item.memberId, name: item.name, initials: item.initials, color: item.color, role: item.role, addressText: item.addressText, reason: 'Could not geocode address' });
-          }
+          });
         }
       } else if (needsGeocode.length > 0) {
-        console.warn(`[ActivityMapView] ${needsGeocode.length} members have addresses but no Mapbox token is present for geocoding.`);
         needsGeocode.forEach((item) => {
-          unmapped.push({ attendeeId: item.att.id, memberId: item.memberId, name: item.name, initials: item.initials, color: item.color, role: item.role, addressText: item.addressText, reason: 'Mapbox token missing for geocoding' });
+          unmapped.push({ attendeeId: item.att.id, memberId: item.memberId, name: item.name, initials: item.initials, color: item.color, role: item.role, addressText: item.addressText, reason: 'Mapbox token missing for geocoding', startsAt: item.att.startsAt, endsAt: item.att.endsAt, opDate: item.opDate });
         });
       }
 
@@ -469,7 +618,7 @@ export const ActivityMapView: React.FC<ActivityMapViewProps> = ({
     return () => {
       isCancelled = true;
     };
-  }, [attendees, memberMap, mapboxToken, actLat, actLng]);
+  }, [activeAttendees, members, memberMap, actLat, actLng, mapboxToken]);
 
   // 2. Fetch driving routes & compute carpools in a unified pipeline
   const [suggestedCarpools, setSuggestedCarpools] = useState<CarpoolGroup[]>([]);
@@ -611,10 +760,11 @@ export const ActivityMapView: React.FC<ActivityMapViewProps> = ({
 
         const driverDirectDist = calculateDistanceMiles(driver.lat, driver.lng, actLat!, actLng!);
 
-        // Find candidate pickups along forward corridor
+        // Find candidate pickups along forward corridor for the same operational date
         const candidates = availableMembers
           .filter((other) => {
             if (other.memberId === driver.memberId || assignedIds.has(other.memberId)) return false;
+            if (driver.opDate && other.opDate && driver.opDate !== other.opDate) return false;
             const otherToIncident = calculateDistanceMiles(other.lat, other.lng, actLat!, actLng!);
             const driverToOther = calculateDistanceMiles(driver.lat, driver.lng, other.lat, other.lng);
             return otherToIncident <= driverDirectDist * 1.05 && driverToOther <= 60;
@@ -814,10 +964,14 @@ export const ActivityMapView: React.FC<ActivityMapViewProps> = ({
               <div style="font-size: 13px; font-weight: 600; color: #0f172a;">
                 ${activityName}
               </div>
-              ${locationText ? `<div style="font-size: 12px; color: #64748b; margin-top: 2px;">${locationText}</div>` : ''}
-              <div style="font-size: 11px; color: #94a3b8; margin-top: 4px; font-family: monospace;">
-                ${actLat.toFixed(5)}, ${actLng.toFixed(5)}
+              <div style="font-size: 12px; color: #64748b; margin-top: 2px;">
+                ${streetAddress ? streetAddress : `${actLat.toFixed(5)}, ${actLng.toFixed(5)}`}
               </div>
+              ${!streetAddress && (activity?.address?.town || activity?.address?.street) ? `
+                <div style="font-size: 11px; color: #94a3b8; margin-top: 2px;">
+                  ${[activity?.address?.street, activity?.address?.town].filter(Boolean).join(', ')}
+                </div>
+              ` : ''}
             </div>
           `);
 
@@ -1999,13 +2153,22 @@ export const ActivityMapView: React.FC<ActivityMapViewProps> = ({
               </div>
               <div style={{ marginLeft: 21, marginTop: 2 }}>
                 <div style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--slate-12)' }}>
-                  {locationText || activityName || 'Location'}
+                  {streetAddress ? (
+                    streetAddress
+                  ) : actLat != null && actLng != null ? (
+                    <span style={{ fontFamily: 'monospace' }}>
+                      {actLat.toFixed(5)}, {actLng.toFixed(5)}
+                    </span>
+                  ) : (
+                    locationText || activityName || 'Location'
+                  )}
                 </div>
-                {actLat != null && actLng != null ? (
-                  <div style={{ fontSize: '0.75rem', color: 'var(--slate-9)', fontFamily: 'monospace', marginTop: 1 }}>
-                    {actLat.toFixed(5)}, {actLng.toFixed(5)}
+                {!streetAddress && (activity?.address?.town || activity?.address?.street) && (
+                  <div style={{ fontSize: '0.75rem', color: 'var(--slate-9)', marginTop: 1 }}>
+                    {[activity?.address?.street, activity?.address?.town].filter(Boolean).join(', ')}
                   </div>
-                ) : (
+                )}
+                {!streetAddress && actLat == null && !activity?.address?.town && !activity?.address?.street && (
                   <div style={{ fontSize: '0.75rem', color: 'var(--slate-8)' }}>
                     No GPS coordinates available
                   </div>
@@ -2194,7 +2357,7 @@ export const ActivityMapView: React.FC<ActivityMapViewProps> = ({
                             cursor: 'pointer',
                             transition: 'all 0.2s ease',
                             display: 'flex',
-                            alignItems: 'flex-start',
+                            alignItems: 'center',
                             gap: 10,
                           }}
                           className="hover-card-item"
@@ -2283,6 +2446,11 @@ export const ActivityMapView: React.FC<ActivityMapViewProps> = ({
                               </div>
                             ) : (
                               <div style={{ fontSize: '0.8125rem', marginTop: 3, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                                {isMultiPeriod && (driver?.startsAt || activity?.startsAt || (activity as any)?.startDate) && (
+                                  <span style={{ fontWeight: 400, color: 'var(--slate-10)', fontSize: '0.75rem' }}>
+                                    Arrives {format(new Date(driver?.startsAt || activity?.startsAt || (activity as any)?.startDate), 'MM/dd')} ·
+                                  </span>
+                                )}
                                 <span style={{ fontWeight: 600, color: 'var(--slate-12)' }}>
                                   {cp.durationFormatted}
                                 </span>
@@ -2331,7 +2499,7 @@ export const ActivityMapView: React.FC<ActivityMapViewProps> = ({
                                 alignItems: 'center',
                                 justifyContent: 'center',
                               }}
-                              title="Edit carpool"
+                              title="Edit carpool members"
                             >
                               <Edit2 size={12} />
                             </button>
@@ -2409,9 +2577,13 @@ export const ActivityMapView: React.FC<ActivityMapViewProps> = ({
 
                           <div style={{ flex: 1, minWidth: 0 }}>
                             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                              <span style={{ fontWeight: 600, fontSize: '0.875rem', color: 'var(--slate-12)' }}>
-                                {mm.name}
-                              </span>
+                              {!mm.name || mm.name === 'Responding Member' ? (
+                                <div className="skeleton" style={{ width: '55%', height: 16, borderRadius: 4, marginBottom: 2 }} />
+                              ) : (
+                                <span style={{ fontWeight: 600, fontSize: '0.875rem', color: 'var(--slate-12)' }}>
+                                  {mm.name}
+                                </span>
+                              )}
                               <Navigation
                                 size={13}
                                 style={{
@@ -2423,7 +2595,12 @@ export const ActivityMapView: React.FC<ActivityMapViewProps> = ({
                             </div>
 
                             {route && !isCalculatingRoutes ? (
-                              <div style={{ fontSize: '0.8125rem', marginTop: 2, display: 'flex', alignItems: 'baseline', gap: 4 }}>
+                              <div style={{ fontSize: '0.8125rem', marginTop: 2, display: 'flex', alignItems: 'baseline', gap: 6, flexWrap: 'wrap' }}>
+                                {isMultiPeriod && (mm.startsAt || activity?.startsAt || (activity as any)?.startDate) && (
+                                  <span style={{ fontWeight: 400, color: 'var(--slate-10)', fontSize: '0.75rem' }}>
+                                    Arrives {format(new Date(mm.startsAt || activity?.startsAt || (activity as any)?.startDate), 'MM/dd')} ·
+                                  </span>
+                                )}
                                 <span style={{ fontWeight: 600, color: 'var(--slate-12)' }}>
                                   {route.durationFormatted}
                                 </span>
@@ -2482,12 +2659,23 @@ export const ActivityMapView: React.FC<ActivityMapViewProps> = ({
                           </div>
 
                           <div style={{ flex: 1, minWidth: 0 }}>
-                            <span style={{ fontWeight: 600, fontSize: '0.875rem', color: 'var(--slate-12)', display: 'block' }}>
-                              {um.name}
-                            </span>
-                            <span style={{ fontSize: '0.75rem', color: 'var(--slate-9)' }}>
-                              {um.reason || 'No known location'}
-                            </span>
+                            {!um.name || um.name === 'Responding Member' ? (
+                              <div className="skeleton" style={{ width: '55%', height: 16, borderRadius: 4, marginBottom: 2 }} />
+                            ) : (
+                              <span style={{ fontWeight: 600, fontSize: '0.875rem', color: 'var(--slate-12)', display: 'block' }}>
+                                {um.name}
+                              </span>
+                            )}
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2, flexWrap: 'wrap' }}>
+                              {isMultiPeriod && (um.startsAt || activity?.startsAt || (activity as any)?.startDate) && (
+                                <span style={{ fontWeight: 400, color: 'var(--slate-10)', fontSize: '0.75rem' }}>
+                                  Arrives {format(new Date(um.startsAt || activity?.startsAt || (activity as any)?.startDate), 'MM/dd')} ·
+                                </span>
+                              )}
+                              <span style={{ fontSize: '0.75rem', color: 'var(--slate-9)' }}>
+                                {um.reason || 'No known location'}
+                              </span>
+                            </div>
                           </div>
                         </div>
                       );

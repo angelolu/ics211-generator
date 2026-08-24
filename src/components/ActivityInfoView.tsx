@@ -1,5 +1,5 @@
 import React from 'react';
-import { isSameDay, differenceInMinutes } from 'date-fns';
+import { isSameDay, differenceInMinutes, format } from 'date-fns';
 import {
   Calendar,
   ExternalLink,
@@ -9,7 +9,7 @@ import {
   Users,
 } from 'lucide-react';
 import type { Activity, Attendee, Member } from '../api/d4h';
-import { formatActivityLocation, getMemberImageUrl, getSynchronousMemberImageUrl } from '../api/d4h';
+import { formatActivityLocation, getActivityStreetAddress, getMemberImageUrl, getSynchronousMemberImageUrl } from '../api/d4h';
 import { ActivityMiniMap } from './ActivityMiniMap';
 import { ActivityWeatherConditions } from './ActivityWeatherConditions';
 import { cleanDescription } from './ActivityPopover';
@@ -33,7 +33,8 @@ const MemberTileAvatar: React.FC<{
   contextId: number;
   memberId?: number;
   name: string;
-}> = ({ contextId, memberId, name }) => {
+  isReadyToLoadPictures?: boolean;
+}> = ({ contextId, memberId, name, isReadyToLoadPictures = true }) => {
   const [imgUrl, setImgUrl] = React.useState<string | null>(() => {
     return memberId ? getSynchronousMemberImageUrl(contextId, memberId) : null;
   });
@@ -43,18 +44,22 @@ const MemberTileAvatar: React.FC<{
 
   React.useEffect(() => {
     let isCancelled = false;
-    if (!contextId || !memberId) return;
+    if (!isReadyToLoadPictures || !contextId || !memberId) return;
 
-    getMemberImageUrl(contextId, memberId).then((url) => {
-      if (!isCancelled && url) {
-        setImgUrl(url);
-      }
-    });
+    // Defer network image request so main thread and attendee names resolve first
+    const timer = setTimeout(() => {
+      getMemberImageUrl(contextId, memberId).then((url) => {
+        if (!isCancelled && url) {
+          setImgUrl(url);
+        }
+      });
+    }, 60);
 
     return () => {
       isCancelled = true;
+      clearTimeout(timer);
     };
-  }, [contextId, memberId]);
+  }, [contextId, memberId, isReadyToLoadPictures]);
 
   const initials = React.useMemo(() => {
     if (!name) return '??';
@@ -101,22 +106,26 @@ const MemberTileAvatar: React.FC<{
       ) : null}
 
       {(!imgUrl || !loaded) && (
-        <div
-          style={{
-            position: 'absolute',
-            inset: 0,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            background: 'var(--slate-4)',
-            color: 'var(--slate-10)',
-            fontWeight: 700,
-            fontSize: '0.9375rem',
-            letterSpacing: '-0.02em',
-          }}
-        >
-          {initials}
-        </div>
+        !name || name === 'Responding Member' ? (
+          <div className="skeleton" style={{ width: '100%', height: '100%' }} />
+        ) : (
+          <div
+            style={{
+              position: 'absolute',
+              inset: 0,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              background: 'var(--slate-4)',
+              color: 'var(--slate-10)',
+              fontWeight: 700,
+              fontSize: '0.9375rem',
+              letterSpacing: '-0.02em',
+            }}
+          >
+            {initials}
+          </div>
+        )
       )}
     </div>
   );
@@ -140,6 +149,7 @@ export const ActivityInfoView: React.FC<ActivityInfoViewProps> = ({
     durationHours = parseFloat((mins / 60).toFixed(1));
   }
 
+  const streetAddress = getActivityStreetAddress(activity || undefined);
   const locationText = formatActivityLocation(activity || undefined);
 
   let lat: number | null = null;
@@ -158,9 +168,95 @@ export const ActivityInfoView: React.FC<ActivityInfoViewProps> = ({
 
   const cleanedDesc = cleanDescription(activity?.description);
 
+  const uniqueMemberIds = React.useMemo(() => {
+    return new Set(attendees.map((a) => a.member?.id).filter(Boolean));
+  }, [attendees]);
+
+  const isMultiPeriod = React.useMemo(() => {
+    const start = activity?.startsAt || (activity as any)?.startDate;
+    const end = activity?.endsAt || (activity as any)?.endDate;
+    if (start && end) {
+      try {
+        const d1 = new Date(start);
+        const d2 = new Date(end);
+        if (!isNaN(d1.getTime()) && !isNaN(d2.getTime()) && !isSameDay(d1, d2)) {
+          return true;
+        }
+      } catch { }
+    }
+
+    const dates = new Set<string>();
+    attendees.forEach((a) => {
+      if (a.startsAt) {
+        try {
+          const d = new Date(a.startsAt);
+          if (!isNaN(d.getTime())) dates.add(format(d, 'yyyy-MM-dd'));
+        } catch { }
+      }
+    });
+    return dates.size > 1;
+  }, [activity, attendees]);
+
+  const displayedAttendees = React.useMemo(() => {
+    const memberMapById = new Map<number, {
+      primaryAtt: Attendee;
+      allAtts: Attendee[];
+      earliestStartsAt?: string;
+      latestEndsAt?: string;
+      allOpDates: string[];
+    }>();
+
+    attendees.forEach((att) => {
+      const memberId = att.member?.id;
+      if (!memberId) return;
+
+      let opDate: string | undefined;
+      if (att.startsAt) {
+        try {
+          const d = new Date(att.startsAt);
+          if (!isNaN(d.getTime())) {
+            opDate = format(d, 'yyyy-MM-dd');
+          }
+        } catch { }
+      }
+
+      if (!memberMapById.has(memberId)) {
+        memberMapById.set(memberId, {
+          primaryAtt: att,
+          allAtts: [att],
+          earliestStartsAt: att.startsAt,
+          latestEndsAt: att.endsAt,
+          allOpDates: opDate ? [opDate] : [],
+        });
+      } else {
+        const entry = memberMapById.get(memberId)!;
+        entry.allAtts.push(att);
+        if (opDate && !entry.allOpDates.includes(opDate)) {
+          entry.allOpDates.push(opDate);
+        }
+        if (att.startsAt && (!entry.earliestStartsAt || new Date(att.startsAt) < new Date(entry.earliestStartsAt))) {
+          entry.earliestStartsAt = att.startsAt;
+        }
+        if (att.endsAt && (!entry.latestEndsAt || new Date(att.endsAt) > new Date(entry.latestEndsAt))) {
+          entry.latestEndsAt = att.endsAt;
+        }
+      }
+    });
+
+    return Array.from(memberMapById.values()).map((entry) => ({
+      ...entry.primaryAtt,
+      startsAt: entry.earliestStartsAt,
+      endsAt: entry.latestEndsAt,
+      _shiftsCount: entry.allAtts.length,
+      _allOpDates: entry.allOpDates,
+    }));
+  }, [attendees]);
+
   // Map member lookup
   const memberMap = new Map<number, Member>();
   members.forEach((m) => memberMap.set(m.id, m));
+
+  const isReadyToLoadPictures = attendees.length > 0 && members.length > 0;
 
   return (
     <div className="activity-info-view animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
@@ -248,11 +344,19 @@ export const ActivityInfoView: React.FC<ActivityInfoViewProps> = ({
 
           <div>
             <div style={{ fontSize: '0.9375rem', fontWeight: 600, color: 'var(--slate-12)' }}>
-              {locationText || 'No specific location provided'}
+              {streetAddress ? (
+                streetAddress
+              ) : lat != null && lng != null ? (
+                <span style={{ fontFamily: 'monospace' }}>
+                  {lat.toFixed(5)}, {lng.toFixed(5)}
+                </span>
+              ) : (
+                locationText || 'No specific location provided'
+              )}
             </div>
-            {lat != null && lng != null && (
-              <div style={{ fontSize: '0.75rem', color: 'var(--slate-9)', marginTop: 2, fontFamily: 'monospace' }}>
-                {lat.toFixed(5)}, {lng.toFixed(5)}
+            {!streetAddress && (activity?.address?.town || activity?.address?.street) && (
+              <div style={{ fontSize: '0.75rem', color: 'var(--slate-9)', marginTop: 2 }}>
+                {[activity?.address?.street, activity?.address?.town].filter(Boolean).join(', ')}
               </div>
             )}
           </div>
@@ -310,14 +414,14 @@ export const ActivityInfoView: React.FC<ActivityInfoViewProps> = ({
                 borderRadius: 12,
               }}
             >
-              {attendees.length} {attendees.length === 1 ? 'member' : 'members'}
+              {uniqueMemberIds.size} {uniqueMemberIds.size === 1 ? 'member' : 'members'}
             </span>
           </div>
         </div>
 
-        {attendees.length === 0 ? (
+        {displayedAttendees.length === 0 ? (
           <div style={{ textAlign: 'center', padding: '32px 16px', color: 'var(--slate-9)', fontSize: '0.875rem' }}>
-            No confirmed responding personnel found for this activity yet.
+            No confirmed responding personnel found.
           </div>
         ) : (
           <div
@@ -327,14 +431,16 @@ export const ActivityInfoView: React.FC<ActivityInfoViewProps> = ({
               gap: 12,
             }}
           >
-            {attendees.map((att, idx) => {
-              const memberObj = memberMap.get(att.member?.id || 0);
-              const name = att.member?.name || memberObj?.name || 'Unknown Member';
-              const roleTitle = att.role?.title || memberObj?.role?.title || memberObj?.position;
+            {displayedAttendees.map((att, idx) => {
+              const memberId = att.member?.id;
+              const m = memberId ? memberMap.get(memberId) : undefined;
+              const name = att.member?.name || m?.name || 'Responding Member';
+              const roleTitle = att.role?.title || m?.role?.title || m?.position;
+              const shiftsCount = (att as any)._shiftsCount || 1;
 
               return (
                 <div
-                  key={att.id || idx}
+                  key={memberId ?? idx}
                   style={{
                     background: 'var(--slate-1)',
                     border: '1px solid var(--slate-3)',
@@ -349,8 +455,9 @@ export const ActivityInfoView: React.FC<ActivityInfoViewProps> = ({
                 >
                   <MemberTileAvatar
                     contextId={contextId}
-                    memberId={att.member?.id || memberObj?.id}
+                    memberId={memberId ?? 0}
                     name={name}
+                    isReadyToLoadPictures={isReadyToLoadPictures}
                   />
 
                   <div
@@ -364,20 +471,25 @@ export const ActivityInfoView: React.FC<ActivityInfoViewProps> = ({
                       gap: 4,
                     }}
                   >
-                    <span
-                      style={{
-                        fontWeight: 700,
-                        fontSize: '0.875rem',
-                        color: 'var(--slate-12)',
-                        whiteSpace: 'nowrap',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                      }}
-                    >
-                      {name}
-                    </span>
+                    {!name || name === 'Responding Member' ? (
+                      <div className="skeleton" style={{ width: '60%', height: 16, borderRadius: 4, marginBottom: 2 }} />
+                    ) : (
+                      <span
+                        style={{
+                          fontWeight: 700,
+                          fontSize: '0.875rem',
+                          color: 'var(--slate-12)',
+                          whiteSpace: 'nowrap',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                        }}
+                      >
+                        {name}
+                      </span>
+                    )}
 
-                    {roleTitle && (
+                    {/* Subtitle: Position / Role + Arrival */}
+                    {(roleTitle || (isMultiPeriod && (att.startsAt || activity?.startsAt || (activity as any)?.startDate))) && (
                       <div
                         style={{
                           fontSize: '0.75rem',
@@ -385,9 +497,10 @@ export const ActivityInfoView: React.FC<ActivityInfoViewProps> = ({
                           display: 'flex',
                           alignItems: 'center',
                           gap: 4,
+                          minWidth: 0,
                         }}
                       >
-                        <Shield size={12} style={{ color: 'var(--slate-8)', flexShrink: 0 }} />
+                        {roleTitle && <Shield size={12} style={{ color: 'var(--slate-8)', flexShrink: 0 }} />}
                         <span
                           style={{
                             whiteSpace: 'nowrap',
@@ -395,7 +508,14 @@ export const ActivityInfoView: React.FC<ActivityInfoViewProps> = ({
                             textOverflow: 'ellipsis',
                           }}
                         >
-                          {roleTitle}
+                          {[
+                            roleTitle,
+                            isMultiPeriod && (att.startsAt || activity?.startsAt || (activity as any)?.startDate)
+                              ? `Arrives ${format(new Date(att.startsAt || activity?.startsAt || (activity as any)?.startDate), 'MM/dd')}${(att as any)._allOpDates?.length > 1 ? ` for ${(att as any)._allOpDates.length}d` : shiftsCount > 1 ? ` for ${shiftsCount}d` : ''}`
+                              : null,
+                          ]
+                            .filter(Boolean)
+                            .join(' · ')}
                         </span>
                       </div>
                     )}

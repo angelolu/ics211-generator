@@ -87,14 +87,14 @@ export function calculateDistanceMiles(
 
 export const MAX_REASONABLE_DISTANCE_MILES = 350;
 
-export const LOCATION_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours TTL for user locations and static routes
+export const LOCATION_CACHE_TTL_MS = 365 * 24 * 60 * 60 * 1000; // Static addresses & zip codes cached indefinitely (1 year)
 export const LIVE_TRAFFIC_CACHE_TTL_MS = 15 * 60 * 1000; // 15 minutes TTL for real-time "Leave Now" live traffic
 
 export function getCacheTtlMs(depKey: string, departAt?: string): number {
   if (depKey === 'now' || departAt === 'now') {
     return LIVE_TRAFFIC_CACHE_TTL_MS;
   }
-  return LOCATION_CACHE_TTL_MS;
+  return 24 * 60 * 60 * 1000;
 }
 
 interface CacheEntry<T> {
@@ -130,9 +130,10 @@ export async function geocodeAddress(addressText: string, customToken?: string):
     return null;
   }
 
+  // Address/Zip code normalized cache key
   const cacheKey = `${GEOCODE_CACHE_KEY_PREFIX}${encodeURIComponent(query.toLowerCase())}`;
 
-  // Check localStorage cache with 24-hour TTL
+  // Check localStorage cache (indefinite TTL for static addresses/zip codes)
   try {
     const cached = localStorage.getItem(cacheKey);
     if (cached) {
@@ -144,13 +145,11 @@ export async function geocodeAddress(addressText: string, customToken?: string):
           localStorage.removeItem(cacheKey);
         }
       } else if (parsed && typeof parsed.lat === 'number' && typeof parsed.lng === 'number') {
-        // Legacy cache format without timestamp
         return parsed as GeocodeResult;
       }
     }
   } catch { }
 
-  // Check in-flight
   if (inFlightGeocodes.has(query)) {
     return inFlightGeocodes.get(query)!;
   }
@@ -180,7 +179,6 @@ export async function geocodeAddress(addressText: string, customToken?: string):
         safeSetLocalStorageItem(cacheKey, JSON.stringify(entry));
         return result;
       } else {
-        // Cache negative result with TTL to avoid re-querying invalid addresses repeatedly
         const entry: CacheEntry<null> = { data: null, timestamp: Date.now() };
         safeSetLocalStorageItem(cacheKey, JSON.stringify(entry));
       }
@@ -194,6 +192,52 @@ export async function geocodeAddress(addressText: string, customToken?: string):
 
   inFlightGeocodes.set(query, promise);
   return promise;
+}
+
+export async function geocodeAddressesBatch(
+  addressTexts: string[],
+  customToken?: string
+): Promise<Record<string, GeocodeResult | null>> {
+  const token = customToken || getMapboxToken();
+  const results: Record<string, GeocodeResult | null> = {};
+  if (!token || addressTexts.length === 0) return results;
+
+  const uniqueQueries = Array.from(new Set(addressTexts.map(a => a.trim()).filter(Boolean)));
+  const uncachedQueries: string[] = [];
+
+  // 1. Resolve from cache first
+  for (const q of uniqueQueries) {
+    const cacheKey = `${GEOCODE_CACHE_KEY_PREFIX}${encodeURIComponent(q.toLowerCase())}`;
+    try {
+      const raw = localStorage.getItem(cacheKey);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && parsed.data !== undefined) {
+          results[q] = parsed.data;
+          continue;
+        }
+      }
+    } catch { }
+    uncachedQueries.push(q);
+  }
+
+  if (uncachedQueries.length === 0) {
+    return results;
+  }
+
+  // 2. Fetch uncached queries in parallel batches of 10
+  const BATCH_SIZE = 10;
+  for (let i = 0; i < uncachedQueries.length; i += BATCH_SIZE) {
+    const batch = uncachedQueries.slice(i, i + BATCH_SIZE);
+    await Promise.all(
+      batch.map(async (q) => {
+        const geo = await geocodeAddress(q, token);
+        results[q] = geo;
+      })
+    );
+  }
+
+  return results;
 }
 
 export type DepartureWindowMode = 'baseline' | 'now' | 'activity_start' | 'morning_rush' | 'midday' | 'evening_rush';

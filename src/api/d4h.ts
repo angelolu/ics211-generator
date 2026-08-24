@@ -153,22 +153,32 @@ export interface Activity {
   countAttendance?: number;
 }
 
+export function getActivityStreetAddress(activity?: Partial<Activity>): string | null {
+  if (!activity) return null;
+  const street = activity.address?.street?.trim();
+  const town = activity.address?.town?.trim();
+
+  // A street address MUST have a house/building number (e.g. "610 Old Mason Street").
+  // Generic street names without house numbers (e.g. "Pacific Ave") or park/town names
+  // should not be treated as a specific street destination.
+  if (street && /^\s*\d+[\w-]*\s+[A-Za-z]/i.test(street)) {
+    if (town && !street.toLowerCase().includes(town.toLowerCase())) {
+      return `${street}, ${town}`;
+    }
+    return street;
+  }
+  return null;
+}
+
 export function formatActivityLocation(activity?: Partial<Activity>): string {
   if (!activity) return '';
 
-  const street = activity.address?.street?.trim();
-  const town = activity.address?.town?.trim();
-  const region = activity.address?.region?.trim();
-
-  const addressParts = [street, town].filter(Boolean);
-  if (addressParts.length > 0) {
-    return addressParts.join(', ');
+  const streetAddress = getActivityStreetAddress(activity);
+  if (streetAddress) {
+    return streetAddress;
   }
 
-  if (region) {
-    return region;
-  }
-
+  // If no full street address with house number, use GPS coordinates if available
   if (
     activity.location?.coordinates &&
     Array.isArray(activity.location.coordinates) &&
@@ -176,8 +186,22 @@ export function formatActivityLocation(activity?: Partial<Activity>): string {
   ) {
     const [lng, lat] = activity.location.coordinates;
     if (lat !== 0 || lng !== 0) {
-      return `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
+      return `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
     }
+  }
+
+  const town = activity.address?.town?.trim();
+  const region = activity.address?.region?.trim();
+
+  if (town) {
+    if (region && !town.toLowerCase().includes(region.toLowerCase())) {
+      return `${town}, ${region}`;
+    }
+    return town;
+  }
+
+  if (region) {
+    return region;
   }
 
   return '';
@@ -745,7 +769,7 @@ export const getMemberDetails = async (contextId: number, memberIds: number[]): 
       }
 
       try {
-        localStorage.setItem(cacheKey, JSON.stringify(memberCache));
+        safeSetLocalStorageItem(cacheKey, JSON.stringify(memberCache));
       } catch { }
     } catch (e) {
       console.error('[D4H Member Details] Error fetching member details:', e);
@@ -759,7 +783,7 @@ export const getMemberDetails = async (contextId: number, memberIds: number[]): 
 
 const memberImageMemoryCache = new Map<number, string | null>();
 const AVATAR_CACHE_PREFIX = 'd4h_avatar_cache_';
-const AVATAR_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours (per AGENTS.md)
+const AVATAR_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days (per user requirement)
 
 function downscaleBlobToDataUrl(blob: Blob, targetSize = 64): Promise<string> {
   return new Promise((resolve) => {

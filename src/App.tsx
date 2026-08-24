@@ -4,7 +4,7 @@ import { Loader2 } from 'lucide-react';
 
 const ConnectD4H = lazy(() => import('./pages/ConnectD4H').then((module) => ({ default: module.ConnectD4H })));
 const Dashboard = lazy(() => import('./pages/Dashboard').then((module) => ({ default: module.Dashboard })));
-const ExerciseDetails = lazy(() => import('./pages/ExerciseDetails').then((module) => ({ default: module.ExerciseDetails })));
+const ActivityDetails = lazy(() => import('./pages/ActivityDetails').then((module) => ({ default: module.ActivityDetails })));
 
 function PageLoader() {
   return (
@@ -25,7 +25,8 @@ function App() {
           <Route path="/connectd4h" element={<Navigate to="/connect-d4h" replace />} />
           <Route path="/login" element={<Navigate to="/connect-d4h" replace />} />
           <Route path="/dashboard" element={<Dashboard />} />
-          <Route path="/exercise/:id" element={<ExerciseDetails />} />
+          <Route path="/activity/:id" element={<ActivityDetails />} />
+          <Route path="/exercise/:id" element={<ActivityDetails />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </Suspense>
