@@ -12,9 +12,6 @@ export const ICS211Form = forwardRef<HTMLDivElement, ICS211FitnessFormProps>(
 
     const { contextMenu, setContextMenu, handleCellContextMenu } = useContextMenu();
 
-    // Tweak this value to adjust how far left the custom menu spawns relative to the cursor
-    const CONTEXT_MENU_X_OFFSET = 200;
-
     const extraColsCount =
       (showId ? 1 : 0) +
       (showStatus ? 1 : 0) +
@@ -31,14 +28,14 @@ export const ICS211Form = forwardRef<HTMLDivElement, ICS211FitnessFormProps>(
     const initialPersonnelAvail = 100 - initialMetricsTotal;
 
     const baseWeights = {
-      id: 6.0,
-      status: 7.0,
-      role: 6.5,
-      positions: 6.5,
-      medical: 6.0,
-      technical: 9.0,
-      phone: 11.5,
-      email: 11.0,
+      id: 5.5,
+      status: 8.5,
+      role: 8.0,
+      positions: 8.5,
+      medical: 7.0,
+      technical: 9.5,
+      phone: 11.0,
+      email: 12.0,
     };
 
     let totalBaseExtras = 0;
@@ -80,9 +77,7 @@ export const ICS211Form = forwardRef<HTMLDivElement, ICS211FitnessFormProps>(
     const emailWidth = `${(baseWeights.email * scaleFactor).toFixed(1)}%`;
 
     const actualExtrasTotal = totalBaseExtras * scaleFactor;
-    const nameWidth = `${Math.max(12, availableForPersonnel - actualExtrasTotal).toFixed(1)}%`;
-    const metricWidth = `${actualMetricWidth.toFixed(1)}%`;
-    const calcHoursWidthStr = `${actualCalcHoursWidth.toFixed(1)}%`;
+    const nameWidth = `${Math.max(10, availableForPersonnel - actualExtrasTotal).toFixed(1)}%`;
 
     const buildRowActions = (row: FormRowData) => ({
       isDeleted: row.isDeleted,
@@ -92,7 +87,7 @@ export const ICS211Form = forwardRef<HTMLDivElement, ICS211FitnessFormProps>(
 
     return (
       <div ref={ref} className="bg-white p-8 font-sans text-black max-w-[11in] mx-auto print:p-0 print:m-0 relative">
-        <ContextMenuOverlay contextMenu={contextMenu} setContextMenu={setContextMenu} xOffset={CONTEXT_MENU_X_OFFSET} />
+        <ContextMenuOverlay contextMenu={contextMenu} setContextMenu={setContextMenu} />
 
         <style type="text/css" media="print">
           {`
@@ -121,106 +116,58 @@ export const ICS211Form = forwardRef<HTMLDivElement, ICS211FitnessFormProps>(
             {showTechnical && <col style={{ width: technicalWidth }} />}
             {showPhone && <col style={{ width: phoneWidth }} />}
             {showEmail && <col style={{ width: emailWidth }} />}
-            <col style={{ width: metricWidth }} />
-            <col style={{ width: metricWidth }} />
-            <col style={{ width: metricWidth }} />
-            <col style={{ width: metricWidth }} />
-            <col style={{ width: metricWidth }} />
-            <col style={{ width: metricWidth }} />
-            <col style={{ width: metricWidth }} />
-            <col style={{ width: metricWidth }} />
-            {showCalcHours && <col style={{ width: calcHoursWidthStr }} />}
+            <col style={{ width: `${actualMetricWidth.toFixed(1)}%` }} />
+            <col style={{ width: `${actualMetricWidth.toFixed(1)}%` }} />
+            <col style={{ width: `${actualMetricWidth.toFixed(1)}%` }} />
+            <col style={{ width: `${actualMetricWidth.toFixed(1)}%` }} />
+            <col style={{ width: `${actualMetricWidth.toFixed(1)}%` }} />
+            <col style={{ width: `${actualMetricWidth.toFixed(1)}%` }} />
+            <col style={{ width: `${actualMetricWidth.toFixed(1)}%` }} />
+            <col style={{ width: `${actualMetricWidth.toFixed(1)}%` }} />
+            {showCalcHours && <col style={{ width: `${actualCalcHoursWidth.toFixed(1)}%` }} />}
           </colgroup>
           <thead className="table-header-group">
             <tr>
               <td colSpan={9 + extraColsCount + (showCalcHours ? 1 : 0)} className="p-0 border-0">
-                {/* Header Information Section */}
                 <div className="grid grid-cols-4 border-b-2 border-black">
                   <div className="col-span-1 border-r border-black p-2 flex flex-col justify-center items-center min-w-0">
-                    <h1 className="font-bold text-lg leading-tight uppercase">Agency Check In List</h1>
-                    <h2 className="font-bold text-md tracking-widest uppercase">Fitness</h2>
+                    <h1 className="font-bold text-lg leading-tight uppercase text-center">Check In List</h1>
+                    <h2 className="font-bold text-[10px] uppercase text-center">(Fitness Assessment)</h2>
                   </div>
                   <div className="col-span-1 border-r border-black px-1 py-0.5 min-w-0 overflow-hidden">
                     <div className="text-[10px] uppercase font-semibold leading-tight">1. {typeLabel} NAME</div>
-                    <EditableCell onContextMenuEvent={handleCellContextMenu}
-                      cell={formState.headers.exerciseName}
-                      onChange={(v) => onUpdateHeader('exerciseName', v)}
-                      highlightChanges={highlightChanges}
-                      className="font-bold text-sm print:text-[11px] leading-tight break-words"
-                    />
+                    <EditableCell onContextMenuEvent={handleCellContextMenu} cell={formState.headers.exerciseName} onChange={(v) => onUpdateHeader('exerciseName', v)} highlightChanges={highlightChanges} className="font-bold text-sm print:text-[11px] leading-tight break-words" />
                   </div>
-                  <div className="col-span-1 border-r border-black px-1 py-0.5 flex min-w-0">
-                    <div className="w-1/2 border-r border-black pr-1 mr-1 min-w-0 overflow-hidden">
-                      <div className="text-[10px] uppercase font-semibold leading-tight">2. DATE</div>
-                      <EditableCell onContextMenuEvent={handleCellContextMenu}
-                        cell={formState.headers.date}
-                        onChange={(v) => onUpdateHeader('date', v)}
-                        highlightChanges={highlightChanges}
-                        className="font-bold text-sm print:text-[11px] leading-tight break-words"
-                      />
-                    </div>
-                    <div className="w-1/2 min-w-0 overflow-hidden">
-                      <div className="text-[10px] uppercase font-semibold leading-tight break-words">3. {typeLabel} NUMBER</div>
-                      <EditableCell onContextMenuEvent={handleCellContextMenu}
-                        cell={formState.headers.exerciseNumber}
-                        onChange={(v) => onUpdateHeader('exerciseNumber', v)}
-                        highlightChanges={highlightChanges}
-                        className="font-bold text-sm print:text-[11px] leading-tight break-words"
-                      />
-                    </div>
+                  <div className="col-span-1 border-r border-black px-1 py-0.5 min-w-0 overflow-hidden">
+                    <div className="text-[10px] uppercase font-semibold leading-tight">2. DATE</div>
+                    <EditableCell onContextMenuEvent={handleCellContextMenu} cell={formState.headers.date} onChange={(v) => onUpdateHeader('date', v)} highlightChanges={highlightChanges} className="font-bold text-sm print:text-[11px] leading-tight break-words" />
                   </div>
                   <div className="col-span-1 px-1 py-0.5 min-w-0 overflow-hidden">
-                    <div className="text-[10px] uppercase font-semibold leading-tight">4. CHECK IN LOCATION</div>
-                    <EditableCell onContextMenuEvent={handleCellContextMenu}
-                      cell={formState.headers.checkInLocation}
-                      onChange={(v) => onUpdateHeader('checkInLocation', v)}
-                      highlightChanges={highlightChanges}
-                      className="font-bold text-sm print:text-[11px] leading-tight break-words"
-                    />
+                    <div className="text-[10px] uppercase font-semibold leading-tight">3. {typeLabel} NUMBER</div>
+                    <EditableCell onContextMenuEvent={handleCellContextMenu} cell={formState.headers.exerciseNumber} onChange={(v) => onUpdateHeader('exerciseNumber', v)} highlightChanges={highlightChanges} className="font-bold text-sm print:text-[11px] leading-tight break-words" />
                   </div>
                 </div>
 
                 <div className="grid grid-cols-4">
                   <div className="col-span-1 border-r border-black px-1 py-0.5 min-w-0 overflow-hidden">
-                    <div className="text-[10px] uppercase font-semibold leading-tight">5. AGENCY/TEAM</div>
-                    <EditableCell onContextMenuEvent={handleCellContextMenu}
-                      cell={formState.headers.agencyTeam}
-                      onChange={(v) => onUpdateHeader('agencyTeam', v)}
-                      highlightChanges={highlightChanges}
-                      className="font-bold text-sm print:text-[11px] leading-tight break-words"
-                    />
+                    <div className="text-[10px] uppercase font-semibold leading-tight">4. CHECK IN LOCATION</div>
+                    <EditableCell onContextMenuEvent={handleCellContextMenu} cell={formState.headers.checkInLocation} onChange={(v) => onUpdateHeader('checkInLocation', v)} highlightChanges={highlightChanges} className="font-bold text-sm print:text-[11px] leading-tight break-words" />
                   </div>
                   <div className="col-span-1 border-r border-black px-1 py-0.5 min-w-0 overflow-hidden">
-                    <div className="text-[10px] uppercase font-semibold leading-tight">6. LIAISON NAME</div>
-                    <EditableCell onContextMenuEvent={handleCellContextMenu}
-                      cell={formState.headers.liaisonName}
-                      onChange={(v) => onUpdateHeader('liaisonName', v)}
-                      highlightChanges={highlightChanges}
-                      className="font-bold text-sm print:text-[11px] leading-tight min-h-[1rem] break-words"
-                    />
+                    <div className="text-[10px] uppercase font-semibold leading-tight">5. LIAISON NAME</div>
+                    <EditableCell onContextMenuEvent={handleCellContextMenu} cell={formState.headers.liaisonName} onChange={(v) => onUpdateHeader('liaisonName', v)} highlightChanges={highlightChanges} className="font-bold text-sm print:text-[11px] leading-tight min-h-[1rem] break-words" />
                   </div>
                   <div className="col-span-1 border-r border-black px-1 py-0.5 min-w-0 overflow-hidden">
-                    <div className="text-[10px] uppercase font-semibold leading-tight">7. AGENCY ADDRESS</div>
-                    <EditableCell onContextMenuEvent={handleCellContextMenu}
-                      cell={formState.headers.agencyAddress}
-                      onChange={(v) => onUpdateHeader('agencyAddress', v)}
-                      highlightChanges={highlightChanges}
-                      className="font-bold text-sm print:text-[11px] leading-tight min-h-[1rem] break-words"
-                    />
+                    <div className="text-[10px] uppercase font-semibold leading-tight">6. AGENCY ADDRESS</div>
+                    <EditableCell onContextMenuEvent={handleCellContextMenu} cell={formState.headers.agencyAddress} onChange={(v) => onUpdateHeader('agencyAddress', v)} highlightChanges={highlightChanges} className="font-bold text-sm print:text-[11px] leading-tight min-h-[1rem] break-words" />
                   </div>
                   <div className="col-span-1 px-1 py-0.5 min-w-0 overflow-hidden">
-                    <div className="text-[10px] uppercase font-semibold leading-tight">8. AGENCY PHONE</div>
-                    <EditableCell onContextMenuEvent={handleCellContextMenu}
-                      cell={formState.headers.agencyPhone}
-                      onChange={(v) => onUpdateHeader('agencyPhone', v)}
-                      highlightChanges={highlightChanges}
-                      className="font-bold text-sm print:text-[11px] leading-tight min-h-[1rem] break-words"
-                    />
+                    <div className="text-[10px] uppercase font-semibold leading-tight">7. AGENCY PHONE #</div>
+                    <EditableCell onContextMenuEvent={handleCellContextMenu} cell={formState.headers.agencyPhone} onChange={(v) => onUpdateHeader('agencyPhone', v)} highlightChanges={highlightChanges} className="font-bold text-sm print:text-[11px] leading-tight min-h-[1rem] break-words" />
                   </div>
                 </div>
               </td>
             </tr>
-            {/* Column Headers */}
             <tr className="bg-gray-50/50 border-y-2 border-black">
               {showId && (
                 <th className="border-r border-black py-1 px-1 text-[9px] font-semibold text-center uppercase leading-tight bg-slate-100 text-slate-500 print:bg-transparent print:text-black">ID</th>
@@ -316,8 +263,8 @@ export const ICS211Form = forwardRef<HTMLDivElement, ICS211FitnessFormProps>(
               return (
                 <tr key={row.id} className={rowClasses}>
                   {showId && (
-                    <td className="border-r border-black p-1 px-2 bg-slate-50 text-slate-500 italic font-medium print:bg-transparent print:text-black print:not-italic print:font-normal">
-                      <div className="text-[10px] leading-tight break-words select-none pointer-events-none text-center">
+                    <td className="border-r border-black p-1 px-1 bg-slate-50 text-slate-500 italic font-medium print:bg-transparent print:text-black print:not-italic print:font-normal">
+                      <div className="text-[10px] leading-tight whitespace-nowrap select-none pointer-events-none text-center">
                         {row.memberId ? (idsMap[row.memberId] || '') : ''}
                       </div>
                     </td>
@@ -326,48 +273,48 @@ export const ICS211Form = forwardRef<HTMLDivElement, ICS211FitnessFormProps>(
                     <EditableCell rowActions={rowActions} onContextMenuEvent={handleCellContextMenu} cell={row.cells.name} onChange={(v) => onUpdateRow(row.id, 'name', v)} highlightChanges={highlightChanges} className="font-medium break-words" />
                   </td>
                   {showStatus && (
-                    <td className="border-r border-black p-1 px-2 bg-slate-50 text-slate-500 italic font-medium print:bg-transparent print:text-black print:not-italic print:font-normal">
-                      <div className="text-[10px] leading-tight break-words select-none pointer-events-none">
+                    <td className="border-r border-black p-1 px-1 bg-slate-50 text-slate-500 italic font-medium print:bg-transparent print:text-black print:not-italic print:font-normal">
+                      <div className="text-[10px] leading-tight break-words select-none pointer-events-none text-center">
                         {row.memberId ? (statusMap[row.memberId] || '') : ''}
                       </div>
                     </td>
                   )}
                   {showRole && (
-                    <td className="border-r border-black p-1 px-2 bg-slate-50 text-slate-500 italic font-medium print:bg-transparent print:text-black print:not-italic print:font-normal">
-                      <div className="text-[10px] leading-tight break-words select-none pointer-events-none">
+                    <td className="border-r border-black p-1 px-1 bg-slate-50 text-slate-500 italic font-medium print:bg-transparent print:text-black print:not-italic print:font-normal">
+                      <div className="text-[10px] leading-tight break-words select-none pointer-events-none text-center">
                         {row.memberId ? (rolesMap[row.memberId] || '') : ''}
                       </div>
                     </td>
                   )}
                   {showPositions && (
-                    <td className="border-r border-black p-1 px-2 bg-slate-50 text-slate-500 italic font-medium print:bg-transparent print:text-black print:not-italic print:font-normal">
+                    <td className="border-r border-black p-1 px-1 bg-slate-50 text-slate-500 italic font-medium print:bg-transparent print:text-black print:not-italic print:font-normal">
                       <div className="text-[10px] leading-tight break-words select-none pointer-events-none">
                         {row.memberId ? (positionsMap[row.memberId] || '') : ''}
                       </div>
                     </td>
                   )}
                   {showMedical && (
-                    <td className="border-r border-black p-1 px-2 bg-slate-50 text-slate-500 italic font-medium print:bg-transparent print:text-black print:not-italic print:font-normal">
-                      <div className="text-[10px] leading-tight break-words select-none pointer-events-none">
+                    <td className="border-r border-black p-1 px-1 bg-slate-50 text-slate-500 italic font-medium print:bg-transparent print:text-black print:not-italic print:font-normal">
+                      <div className="text-[10px] leading-tight break-words select-none pointer-events-none text-center">
                         {row.memberId ? (medicalMap[row.memberId] || '') : ''}
                       </div>
                     </td>
                   )}
                   {showTechnical && (
-                    <td className="border-r border-black p-1 px-2 bg-slate-50 text-slate-500 italic font-medium print:bg-transparent print:text-black print:not-italic print:font-normal">
+                    <td className="border-r border-black p-1 px-1 bg-slate-50 text-slate-500 italic font-medium print:bg-transparent print:text-black print:not-italic print:font-normal">
                       <div className="text-[10px] leading-tight break-words select-none pointer-events-none">
                         {row.memberId ? (technicalMap[row.memberId] || '') : ''}
                       </div>
                     </td>
                   )}
                   {showPhone && (
-                    <td className="border-r border-black p-1 px-2 text-center">
-                      <EditableCell rowActions={rowActions} onContextMenuEvent={handleCellContextMenu} cell={row.cells.phone} onChange={(v) => onUpdateRow(row.id, 'phone', v)} highlightChanges={highlightChanges} className="text-[10px] leading-tight break-words" />
+                    <td className="border-r border-black p-1 px-1 text-center">
+                      <EditableCell rowActions={rowActions} onContextMenuEvent={handleCellContextMenu} cell={row.cells.phone} onChange={(v) => onUpdateRow(row.id, 'phone', v)} highlightChanges={highlightChanges} className="text-[10px] leading-tight whitespace-nowrap text-center" />
                     </td>
                   )}
                   {showEmail && (
                     <td className="border-r border-black p-1 px-1 bg-slate-50 text-slate-500 italic font-medium print:bg-transparent print:text-black print:not-italic print:font-normal">
-                      <div className="text-[9px] leading-tight break-words select-none pointer-events-none text-center">
+                      <div className="text-[9px] leading-tight break-all select-none pointer-events-none text-center">
                         {row.memberId ? (emailMap[row.memberId] || '') : ''}
                       </div>
                     </td>

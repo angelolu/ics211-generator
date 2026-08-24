@@ -1,8 +1,54 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { fetchAndCacheTeamSubdomain, formatActivityLocation, getActivity, getAttendees, getMemberDetails, getMemberQualifications } from '../api/d4h';
+import type { Attendee, Member } from '../api/d4h';
 import { format } from 'date-fns';
 import { calculateHours } from '../utils/time';
 import { buildMemberMaps, type MemberDetailMaps } from '../utils/memberMaps';
+
+/**
+ * localStorage.setItem wrapper that handles QuotaExceededError by evicting
+ * expendable cache entries (d4h_activity_cache, d4h_member_cache_*, mapbox_*)
+ * and retrying once. If it still fails the caller continues without crashing.
+ */
+function safeSetItem(key: string, value: string): void {
+  try {
+    localStorage.setItem(key, value);
+  } catch (e) {
+    if (e instanceof DOMException && e.name === 'QuotaExceededError') {
+      // Collect evictable keys sorted by size descending
+      const evictPrefixes = ['d4h_activity_cache', 'd4h_member_cache_', 'mapbox_geocode_', 'mapbox_route_'];
+      const candidates: { k: string; size: number }[] = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (!k || k === key) continue;
+        if (evictPrefixes.some(p => k.startsWith(p))) {
+          candidates.push({ k, size: (localStorage.getItem(k) ?? '').length });
+        }
+      }
+      // Also evict stale d4h_form_* keys that are not the current one
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (!k || k === key) continue;
+        if (k.startsWith('d4h_form_') && k !== key) {
+          candidates.push({ k, size: (localStorage.getItem(k) ?? '').length });
+        }
+      }
+      candidates.sort((a, b) => b.size - a.size);
+      for (const { k } of candidates) {
+        localStorage.removeItem(k);
+        try {
+          localStorage.setItem(key, value);
+          return; // success after eviction
+        } catch {
+          // keep evicting
+        }
+      }
+      console.warn('safeSetItem: could not free enough space for key:', key);
+    } else {
+      throw e;
+    }
+  }
+}
 
 const formatD4HTime = (isoString?: string | null): string => {
   if (!isoString) return '';
@@ -205,6 +251,8 @@ export function useFormState(exerciseId: number | string | undefined, contextId:
   const lastSavedJsonRef = useRef<string>('');
 
   const [formState, setFormState] = useState<FormStateData | null>(null);
+  const [attendees, setAttendees] = useState<Attendee[]>([]);
+  const [members, setMembers] = useState<Member[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isPulling, setIsPulling] = useState(false);
   const [hasPendingChanges, setHasPendingChanges] = useState(false);
@@ -314,13 +362,32 @@ export function useFormState(exerciseId: number | string | undefined, contextId:
                 : (parsed.rows as FormRowData[]).map(r => r.memberId).filter((id): id is number => typeof id === 'number');
 
               if (cachedMemberIds.length > 0) {
+                getAttendees(contextIdNum, exerciseId as number).then(att => {
+                  setAttendees(att);
+                  const attMemberIds = att.map(a => a.member?.id).filter((id): id is number => typeof id === 'number');
+                  if (attMemberIds.length > 0) {
+                    getMemberDetails(contextIdNum, attMemberIds).then(mems => {
+                      setMembers(prev => {
+                        const merged = new Map(prev.map(m => [m.id, m]));
+                        mems.forEach(m => merged.set(m.id, m));
+                        return Array.from(merged.values());
+                      });
+                    });
+                  }
+                }).catch(() => {});
+
                 getMemberQualifications(contextIdNum, cachedMemberIds)
                   .then(res => {
                     setMemberMaps(prev => ({ ...prev, medicalMap: res.medicalMap, technicalMap: res.technicalMap }));
                   });
                 getMemberDetails(contextIdNum, cachedMemberIds)
-                  .then(members => {
-                    const maps = buildMemberMaps(members);
+                  .then(mems => {
+                    setMembers(prev => {
+                      const merged = new Map(prev.map(m => [m.id, m]));
+                      mems.forEach(m => merged.set(m.id, m));
+                      return Array.from(merged.values());
+                    });
+                    const maps = buildMemberMaps(mems);
                     setMemberMaps(prev => ({ ...prev, ...maps }));
                   });
               }
@@ -521,7 +588,7 @@ export function useFormState(exerciseId: number | string | undefined, contextId:
           }
           const newState: FormStateData = { headers, rows };
           setFormState(newState);
-          localStorage.setItem(storageKey, JSON.stringify(newState));
+          safeSetItem(storageKey, JSON.stringify(newState));
 
           // Ensure this roster is present in fitnessqual_local_rosters
           try {
@@ -546,11 +613,13 @@ export function useFormState(exerciseId: number | string | undefined, contextId:
 
         // Build from scratch (D4H)
         const attData = await getAttendees(contextIdNum, exerciseId as number);
+        setAttendees(attData);
         const memberIds = Array.from(new Set(attData.map(a => a.member.id)));
         const [memberData, qualRes] = await Promise.all([
           memberIds.length > 0 ? getMemberDetails(contextIdNum, memberIds) : Promise.resolve([]),
           memberIds.length > 0 ? getMemberQualifications(contextIdNum, memberIds) : Promise.resolve({ medicalMap: {}, technicalMap: {} }),
         ]);
+        setMembers(memberData);
 
         const maps = buildMemberMaps(memberData, attData);
         setMemberMaps({
@@ -655,7 +724,7 @@ export function useFormState(exerciseId: number | string | undefined, contextId:
 
         const newState: FormStateData = { headers: finalHeaders, rows: finalRows, periods };
         setFormState(newState);
-        localStorage.setItem(storageKey, JSON.stringify(newState));
+        safeSetItem(storageKey, JSON.stringify(newState));
       } catch (e) {
         console.error("Failed to load initial data", e);
       } finally {
@@ -672,7 +741,11 @@ export function useFormState(exerciseId: number | string | undefined, contextId:
       const json = JSON.stringify(formState);
       if (json !== lastSavedJsonRef.current) {
         lastSavedJsonRef.current = json;
-        localStorage.setItem(storageKey, json);
+        try {
+          safeSetItem(storageKey, json);
+        } catch (storageErr) {
+          console.warn('Auto-save skipped: storage full', storageErr);
+        }
 
         // If local roster, keep title in fitnessqual_local_rosters updated
         if (typeof exerciseId === 'string' && exerciseId.startsWith('local_')) {
@@ -1157,6 +1230,9 @@ export function useFormState(exerciseId: number | string | undefined, contextId:
       return { ...prev, headers: newHeaders, rows: newRows, periods: newPeriods };
     });
 
+    setAttendees(attData);
+    setMembers(memberData);
+
     setHasPendingChanges(false);
     setPendingChanges([]);
   };
@@ -1226,6 +1302,8 @@ export function useFormState(exerciseId: number | string | undefined, contextId:
 
   return {
     formState,
+    attendees,
+    members,
     isLoading,
     isPulling,
     hasLocalChanges,

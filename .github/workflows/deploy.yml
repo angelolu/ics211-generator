@@ -36,6 +36,8 @@ jobs:
         run: npm ci
 
       - name: Build project
+        env:
+          VITE_MAPBOX_TOKEN: ${{ secrets.VITE_MAPBOX_TOKEN }}
         run: npm run build
 
       - name: Copy index.html to 404.html for SPA routing

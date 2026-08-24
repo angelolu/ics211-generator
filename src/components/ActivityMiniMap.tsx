@@ -119,26 +119,16 @@ export const ActivityMiniMap: React.FC<ActivityMiniMapProps> = ({
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-      <div
-        ref={mapContainerRef}
-        style={{
-          height,
-          width: '100%',
-          borderRadius: 8,
-          overflow: 'hidden',
-          border: '1px solid var(--slate-4)',
-          zIndex: 0,
-        }}
-      />
-      {locationName && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.8125rem', color: 'var(--slate-11)' }}>
-          <MapPin size={13} style={{ flexShrink: 0, color: 'var(--slate-8)' }} />
-          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {locationName}
-          </span>
-        </div>
-      )}
-    </div>
+    <div
+      ref={mapContainerRef}
+      style={{
+        height,
+        width: '100%',
+        borderRadius: 8,
+        overflow: 'hidden',
+        border: '1px solid var(--slate-4)',
+        zIndex: 0,
+      }}
+    />
   );
 };

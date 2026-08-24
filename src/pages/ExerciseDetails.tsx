@@ -3,6 +3,7 @@ import * as Label from '@radix-ui/react-label';
 import * as Select from '@radix-ui/react-select';
 import * as Separator from '@radix-ui/react-separator';
 import * as Switch from '@radix-ui/react-switch';
+import * as ToggleGroup from '@radix-ui/react-toggle-group';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import {
   AlertTriangle,
@@ -17,8 +18,10 @@ import {
   Hash,
   HeartPulse,
   Highlighter,
+  Info,
   Loader2,
   Mail,
+  Map as MapIcon,
   Phone,
   Plus,
   Printer,
@@ -35,6 +38,9 @@ import { Navigate, useNavigate, useLocation, useParams } from 'react-router-dom'
 import { useReactToPrint } from 'react-to-print';
 import { getD4HActivityUrl } from '../api/d4h';
 import type { Activity } from '../api/d4h';
+import { ActivityInfoView } from '../components/ActivityInfoView';
+import { ActivityMapView } from '../components/ActivityMapView';
+import { ActivityStatusBadges } from '../components/ActivityStatusBadges';
 import { ICS211AForm } from '../components/ICS211AForm';
 import { ICS211BForm } from '../components/ICS211BForm';
 import { ICS211Form } from '../components/ICS211Form';
@@ -103,6 +109,32 @@ export function ExerciseDetails() {
 
   const [showResetModal, setShowResetModal] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [activeView, setActiveView] = useState<'info' | 'roster' | 'map'>(() => {
+    if (!id) return 'info';
+    const saved = localStorage.getItem(`d4h_active_view_${id}`);
+    if (saved === 'info' || saved === 'roster' || saved === 'map') {
+      return saved;
+    }
+    return 'info';
+  });
+
+  useEffect(() => {
+    if (!id) return;
+    const saved = localStorage.getItem(`d4h_active_view_${id}`);
+    if (saved === 'info' || saved === 'roster' || saved === 'map') {
+      setActiveView(saved);
+    } else {
+      setActiveView('info');
+    }
+  }, [id]);
+
+  const handleViewChange = (view: 'info' | 'roster' | 'map') => {
+    setActiveView(view);
+    if (id) {
+      localStorage.setItem(`d4h_active_view_${id}`, view);
+    }
+  };
+
   const [formType, setFormType] = useState(() => localStorage.getItem(`d4h_form_type_${id}`) || '211a');
   const [showCalcHours, setShowCalcHours] = useState(false);
   const [showValidation, setShowValidation] = useState(false);
@@ -135,7 +167,7 @@ export function ExerciseDetails() {
   };
 
   const {
-    formState, isLoading, isPulling, hasLocalChanges, hasConflicts, hasPendingChanges,
+    formState, attendees, members, isLoading, isPulling, hasLocalChanges, hasConflicts, hasPendingChanges,
     pendingChanges, removedAttendeesPrompt, confirmRemovedAttendees, cancelRemovedAttendees,
     medicalMap, technicalMap, positionsMap, idsMap, statusMap, rolesMap, emailMap,
     highlightChanges, setHighlightChanges, updateHeaderCell, updateRowCell,
@@ -143,12 +175,12 @@ export function ExerciseDetails() {
   } = useFormState(id ? (id.startsWith('local_') ? id : parseInt(id, 10)) : undefined, contextId, currentExercise, teamTitle);
 
   const isLocal = typeof id === 'string' && id.startsWith('local_');
+  const isD4HConnected = Boolean(localStorage.getItem('d4h_token') && !isLocal);
   const activityName = isLocal && formState?.headers?.exerciseName?.value
     ? formState.headers.exerciseName.value
     : currentExercise?.referenceDescription || currentExercise?.description || (currentExercise as { title?: string })?.title || 'Exercise Details';
   useDocumentTitle(activityName);
   const activityType = currentExercise?.type || 'local';
-  const currentFormLabel = FORM_TYPES.find(f => f.value === formType)?.label ?? formType;
 
   const handlePrint = useReactToPrint({
     contentRef: componentRef,
@@ -165,6 +197,7 @@ export function ExerciseDetails() {
       }
       localStorage.removeItem(`d4h_form_${id}`);
       localStorage.removeItem(`d4h_form_type_${id}`);
+      localStorage.removeItem(`d4h_active_view_${id}`);
       navigate('/dashboard');
     } catch (e) {
       console.error('Failed to delete local roster', e);
@@ -316,7 +349,7 @@ export function ExerciseDetails() {
 
   return (
     <Tooltip.Provider delayDuration={400}>
-      <div className="app-bg" style={{ minHeight: '100vh', paddingBottom: 64 }}>
+      <div className="app-bg" style={{ minHeight: '100vh', paddingBottom: 16 }}>
 
         {/* ── Header ─────────────────────────────────────── */}
         <header className="app-header no-print">
@@ -347,25 +380,22 @@ export function ExerciseDetails() {
                 </Tooltip.Portal>
               </Tooltip.Root>
 
-              <div style={{ minWidth: 0 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <span className={`badge badge-${activityType}`} style={{
-                    background: 'rgba(255,255,255,0.12)',
-                    color: 'rgba(220,195,148,0.9)',
-                    border: '1px solid rgba(220,195,148,0.25)',
-                  }}>
-                    {TYPE_LABELS[activityType]}
-                  </span>
-                  <span style={{
-                    fontWeight: 700, fontSize: '0.9375rem', color: 'white',
-                    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                  }}>
-                    {activityName}
-                  </span>
-                </div>
-                <div style={{ fontSize: '0.75rem', color: 'rgba(220,195,148,0.55)', marginTop: 2 }}>
-                  {currentFormLabel} · {teamTitle}
-                </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+                <span className={`badge badge-${activityType}`} style={{
+                  flexShrink: 0,
+                  background: 'rgba(255,255,255,0.12)',
+                  color: 'rgba(220,195,148,0.9)',
+                  border: '1px solid rgba(220,195,148,0.25)',
+                }}>
+                  {TYPE_LABELS[activityType]}
+                </span>
+                <span style={{
+                  fontWeight: 700, fontSize: '1rem', color: 'white',
+                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                  letterSpacing: '-0.01em',
+                }}>
+                  {activityName}
+                </span>
               </div>
             </div>
 
@@ -396,7 +426,7 @@ export function ExerciseDetails() {
                         }}
                       >
                         <ExternalLink size={13} className="header-icon-responsive" />
-                        <span>D4H event</span>
+                        <span>D4H</span>
                       </button>
                     </Tooltip.Trigger>
                     <Tooltip.Portal>
@@ -459,16 +489,68 @@ export function ExerciseDetails() {
                   </Tooltip.Root>
                 </div>
               )}
+            </div>
+          </div>
+        </header>
 
-              {/* Changes dropdown */}
-              {!isLocal && (
+        <main style={{ maxWidth: 1200, margin: '0 auto', padding: '16px 16px 0', WebkitPrintColorAdjust: 'exact', printColorAdjust: 'exact' } as React.CSSProperties}>
+
+          {/* ── Top View & Action Bar ──────────────────────── */}
+          <div className="no-print" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20, flexWrap: 'wrap', gap: 12 }}>
+            {/* View Switcher (only when connected to D4H and not local) */}
+            {isD4HConnected ? (
+              <ToggleGroup.Root
+                type="single"
+                value={activeView}
+                onValueChange={(v) => { if (v) handleViewChange(v as 'info' | 'roster' | 'map'); }}
+                className="toggle-group"
+              >
+                <ToggleGroup.Item value="info" className="toggle-item" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <Info size={14} />
+                  <span>Info</span>
+                </ToggleGroup.Item>
+                <ToggleGroup.Item value="roster" className="toggle-item" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <FileText size={14} />
+                  <span>Roster</span>
+                </ToggleGroup.Item>
+                <ToggleGroup.Item value="map" className="toggle-item" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <MapIcon size={14} />
+                  <span>Map</span>
+                </ToggleGroup.Item>
+              </ToggleGroup.Root>
+            ) : <div />}
+
+            {/* Badges in Info view (on the right side of the screen, in line with switcher) */}
+            {isD4HConnected && activeView === 'info' && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginLeft: 'auto' }}>
+                <ActivityStatusBadges
+                  activity={currentExercise}
+                  activityType={activityType}
+                  attendees={attendees}
+                  isLocal={isLocal}
+                  onAttendanceChanged={() => pullData()}
+                />
+              </div>
+            )}
+
+            {/* Options and Export buttons (only in roster view, shown for both local and D4H activities) */}
+            {(!isD4HConnected || activeView === 'roster') && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginLeft: 'auto' }}>
+                {/* Options dropdown */}
                 <DropdownMenu.Root>
                   <DropdownMenu.Trigger asChild>
-                    <button className="btn btn-sm" style={{
-                      background: hasConflicts ? 'rgba(220,38,38,0.25)' : hasLocalChanges ? 'rgba(217,119,6,0.2)' : 'rgba(255,255,255,0.1)',
-                      color: hasConflicts ? '#fca5a5' : hasLocalChanges ? '#fcd34d' : 'rgba(255,255,255,0.85)',
-                      border: hasConflicts ? '1px solid rgba(220,38,38,0.4)' : hasLocalChanges ? '1px solid rgba(217,119,6,0.4)' : '1px solid rgba(255,255,255,0.18)',
-                    }}>
+                    <button
+                      className="btn btn-secondary btn-sm"
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 6,
+                        cursor: 'pointer',
+                        background: hasConflicts ? 'var(--red-3)' : hasLocalChanges ? 'var(--amber-3)' : undefined,
+                        color: hasConflicts ? 'var(--red-11)' : hasLocalChanges ? 'var(--amber-11)' : undefined,
+                        borderColor: hasConflicts ? 'var(--red-7)' : hasLocalChanges ? 'var(--amber-7)' : undefined,
+                      }}
+                    >
                       {hasConflicts && <AlertTriangle size={13} />}
                       {!hasConflicts && hasLocalChanges && (
                         <span style={{
@@ -476,7 +558,7 @@ export function ExerciseDetails() {
                           background: 'var(--amber-9)', display: 'inline-block',
                         }} />
                       )}
-                      Options
+                      <span>Options</span>
                       <ChevronDown size={13} />
                     </button>
                   </DropdownMenu.Trigger>
@@ -595,296 +677,332 @@ export function ExerciseDetails() {
                         <RotateCcw size={14} style={{ color: 'var(--slate-9)' }} />
                         Reset
                       </DropdownMenu.Item>
+
+                      {isLocal && (
+                        <>
+                          <DropdownMenu.Separator style={{ height: 1, background: 'var(--slate-5)', margin: '4px 0' }} />
+                          <DropdownMenu.Item
+                            className="select-item"
+                            onSelect={() => setShowDeleteModal(true)}
+                            style={{
+                              display: 'flex', alignItems: 'center', gap: 8,
+                              borderRadius: 6, padding: '8px 12px', outline: 'none',
+                              fontSize: '0.875rem', color: 'var(--red-11)',
+                              cursor: 'pointer',
+                            }}
+                          >
+                            <Trash2 size={14} style={{ color: 'var(--red-10)' }} />
+                            Delete roster
+                          </DropdownMenu.Item>
+                        </>
+                      )}
                     </DropdownMenu.Content>
                   </DropdownMenu.Portal>
                 </DropdownMenu.Root>
-              )}
-              {/* Delete local roster */}
-              {isLocal && (
-                <button
-                  className="btn btn-sm"
-                  style={{
-                    background: 'rgba(220,38,38,0.15)',
-                    color: '#fca5a5',
-                    border: '1px solid rgba(220,38,38,0.3)',
-                  }}
-                  onClick={() => setShowDeleteModal(true)}
-                >
-                  <Trash2 size={13} />
-                  Delete
-                </button>
-              )}
 
-              <Separator.Root style={{ width: 1, height: 24, background: 'rgba(255,255,255,0.15)' }} orientation="vertical" />
-
-              {/* Export dropdown */}
-              <DropdownMenu.Root>
-                <DropdownMenu.Trigger asChild>
-                  <button
-                    className="btn btn-sm"
-                    style={{ background: 'var(--gold-6)', color: 'var(--navy-9)', fontWeight: 700 }}
-                  >
-                    <FileText size={14} className="header-icon-responsive" />
-                    <span>Export</span>
-                    <ChevronDown size={13} />
-                  </button>
-                </DropdownMenu.Trigger>
-                <DropdownMenu.Portal>
-                  <DropdownMenu.Content
-                    className="select-content"
-                    align="end"
-                    sideOffset={6}
-                    style={{ padding: 4, minWidth: 160 }}
-                  >
-                    <DropdownMenu.Item
-                      className="select-item"
-                      onSelect={() => handlePrint()}
-                      style={{
-                        display: 'flex', alignItems: 'center', gap: 8,
-                        borderRadius: 6, padding: '8px 12px', outline: 'none', cursor: 'pointer',
-                        fontSize: '0.875rem', color: 'var(--slate-12)',
-                      }}
-                    >
-                      <Printer size={14} style={{ color: 'var(--slate-9)' }} />
-                      PDF / Print
-                    </DropdownMenu.Item>
-                    <DropdownMenu.Item
-                      className="select-item"
-                      onSelect={() => handleExportCsv()}
-                      style={{
-                        display: 'flex', alignItems: 'center', gap: 8,
-                        borderRadius: 6, padding: '8px 12px', outline: 'none', cursor: 'pointer',
-                        fontSize: '0.875rem', color: 'var(--slate-12)',
-                      }}
-                    >
-                      <FileDown size={14} style={{ color: 'var(--slate-9)' }} />
-                      CSV
-                    </DropdownMenu.Item>
-                  </DropdownMenu.Content>
-                </DropdownMenu.Portal>
-              </DropdownMenu.Root>
-            </div>
-          </div>
-        </header>
-
-        <main style={{ maxWidth: 1200, margin: '0 auto', padding: '24px 24px 0', WebkitPrintColorAdjust: 'exact', printColorAdjust: 'exact' } as React.CSSProperties}>
-
-          {/* ── Config card ──────────────────────────────── */}
-          <div className="card no-print" style={{ padding: '18px 24px', marginBottom: 20 }}>
-            <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 16 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <FileText size={16} style={{ color: 'var(--slate-9)' }} />
-                <span style={{ fontWeight: 600, fontSize: '0.9375rem', color: 'var(--slate-12)' }}>
-                  Form Builder
-                </span>
-                <span style={{ fontSize: '0.8125rem', color: 'var(--slate-10)' }}>· auto-saved locally</span>
-              </div>
-
-              <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-                {/* Form type select */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <Label.Root style={{ fontSize: '0.8125rem', fontWeight: 500, color: 'var(--slate-11)', whiteSpace: 'nowrap' }}>
-                    Form Type
-                  </Label.Root>
-                  <Select.Root value={formType} onValueChange={handleFormTypeChange}>
-                    <Select.Trigger className="select-trigger">
-                      <Select.Value />
-                      <Select.Icon><ChevronDown size={14} /></Select.Icon>
-                    </Select.Trigger>
-                    <Select.Portal>
-                      <Select.Content className="select-content" position="popper" sideOffset={6}>
-                        <Select.Viewport>
-                          {FORM_TYPES.map(ft => (
-                            <Select.Item key={ft.value} value={ft.value} className="select-item">
-                              <Select.ItemText>{ft.label}</Select.ItemText>
-                              <Select.ItemIndicator style={{ marginLeft: 'auto' }}>
-                                <Check size={13} style={{ color: 'var(--indigo-9)' }} />
-                              </Select.ItemIndicator>
-                            </Select.Item>
-                          ))}
-                        </Select.Viewport>
-                      </Select.Content>
-                    </Select.Portal>
-                  </Select.Root>
-                </div>
-
-                {/* Data-driven column toggles dropdown */}
+                {/* Export dropdown */}
                 <DropdownMenu.Root>
                   <DropdownMenu.Trigger asChild>
-                    <button className="select-trigger" style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, width: 'auto' }}>
-                      <span>Columns</span>
-                      <ChevronDown size={14} />
+                    <button
+                      className="btn btn-sm"
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 6,
+                        background: 'var(--gold-6)',
+                        color: 'var(--navy-9)',
+                        fontWeight: 700,
+                        border: '1px solid var(--gold-7)',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      <FileText size={14} className="header-icon-responsive" />
+                      <span>Export</span>
+                      <ChevronDown size={13} />
                     </button>
                   </DropdownMenu.Trigger>
-
                   <DropdownMenu.Portal>
                     <DropdownMenu.Content
                       className="select-content"
-                      align="start"
+                      align="end"
                       sideOffset={6}
-                      style={{ padding: 4, width: 'max-content' }}
+                      style={{ padding: 4, minWidth: 160 }}
                     >
-                      {COLUMN_TOGGLES.map(({ key, label, icon: Icon, className }) => (
-                        <DropdownMenu.Item
-                          key={key}
-                          onSelect={(e) => { e.preventDefault(); toggleColumn(key); }}
-                          style={{
-                            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                            gap: 16, padding: '7px 10px', borderRadius: 6, cursor: 'pointer', outline: 'none',
-                            fontSize: '0.8125rem', color: 'var(--slate-12)',
-                          }}
-                          className={`select-item ${className || ''}`}
-                        >
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                            <Icon size={14} style={{ color: 'var(--slate-9)' }} />
-                            {label}
-                          </div>
-                          <Switch.Root
-                            checked={columnFlags[key]}
-                            className="switch-root"
-                            style={{ pointerEvents: 'none' }}
-                          >
-                            <Switch.Thumb className="switch-thumb" />
-                          </Switch.Root>
-                        </DropdownMenu.Item>
-                      ))}
+                      <DropdownMenu.Item
+                        className="select-item"
+                        onSelect={() => handlePrint()}
+                        style={{
+                          display: 'flex', alignItems: 'center', gap: 8,
+                          borderRadius: 6, padding: '8px 12px', outline: 'none', cursor: 'pointer',
+                          fontSize: '0.875rem', color: 'var(--slate-12)',
+                        }}
+                      >
+                        <Printer size={14} style={{ color: 'var(--slate-9)' }} />
+                        PDF / Print
+                      </DropdownMenu.Item>
+                      <DropdownMenu.Item
+                        className="select-item"
+                        onSelect={() => handleExportCsv()}
+                        style={{
+                          display: 'flex', alignItems: 'center', gap: 8,
+                          borderRadius: 6, padding: '8px 12px', outline: 'none', cursor: 'pointer',
+                          fontSize: '0.875rem', color: 'var(--slate-12)',
+                        }}
+                      >
+                        <FileDown size={14} style={{ color: 'var(--slate-9)' }} />
+                        CSV
+                      </DropdownMenu.Item>
                     </DropdownMenu.Content>
                   </DropdownMenu.Portal>
                 </DropdownMenu.Root>
-
-                {/* Add rows (only shown when not multi-period, since multi-period pages have their own row buttons) */}
-                {(!formState?.periods || formState.periods.length <= 1) && (
-                  <>
-                    <Separator.Root className="separator" style={{ width: 1, height: 20 }} orientation="vertical" />
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      <Label.Root style={{ fontSize: '0.8125rem', fontWeight: 500, color: 'var(--slate-11)', whiteSpace: 'nowrap' }}>
-                        Add rows
-                      </Label.Root>
-                      <button
-                        className="btn btn-secondary btn-sm"
-                        onClick={() => addBlankRows(1)}
-                      >
-                        <Plus size={13} /> 1
-                      </button>
-                      <button
-                        className="btn btn-secondary btn-sm"
-                        onClick={() => addBlankRows(5)}
-                      >
-                        <Plus size={13} /> 5
-                      </button>
-                    </div>
-                  </>
-                )}
               </div>
-            </div>
+            )}
           </div>
 
-          {/* ── Conflict banner ───────────────────────────── */}
-          {hasConflicts && (
-            <div
-              className="no-print"
-              style={{
-                marginBottom: 16, padding: '12px 20px', borderRadius: 10,
-                background: 'var(--red-3)', border: '1px solid var(--red-6)',
-                display: 'flex', alignItems: 'flex-start', gap: 12,
-              }}
-            >
-              <AlertTriangle size={18} style={{ color: 'var(--red-10)', flexShrink: 0, marginTop: 1 }} />
-              <div>
-                <p style={{ fontWeight: 600, fontSize: '0.875rem', color: 'var(--red-12)', marginBottom: 2 }}>
-                  Merge Conflicts Detected
-                </p>
-                <p style={{ fontSize: '0.8125rem', color: 'var(--red-11)', lineHeight: 1.5 }}>
-                  Remote D4H changes conflict with your local edits. Hover over red cells to see remote values, or use the Changes menu to accept D4H values.
-                </p>
-              </div>
-              <button className="btn btn-danger btn-sm" style={{ marginLeft: 'auto', flexShrink: 0 }} onClick={() => fixConflicts()}>
-                Fix conflicts
-              </button>
-            </div>
-          )}
-
-          {/* ── Form ─────────────────────────────────────── */}
-          {isLoading ? (
-            <div className="no-print" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: 300, gap: 16 }}>
-              <Loader2 size={36} style={{ color: 'var(--indigo-9)', animation: 'spin 1s linear infinite' }} />
-              <p style={{ fontSize: '0.9375rem', color: 'var(--slate-10)', fontWeight: 500 }}>
-                Loading roster data…
-              </p>
-            </div>
-          ) : !formState ? (
-            <Navigate to="/" replace />
+          {isD4HConnected && activeView === 'info' ? (
+            <ActivityInfoView
+              activity={currentExercise}
+              activityType={activityType}
+              activityName={activityName}
+              teamTitle={teamTitle}
+              attendees={attendees}
+              members={members}
+              medicalMap={medicalMap}
+              technicalMap={technicalMap}
+              isLocal={isLocal}
+              onSwitchToRoster={() => handleViewChange('roster')}
+              onSwitchToMap={() => handleViewChange('map')}
+              onAttendanceChanged={() => pullData()}
+            />
+          ) : isD4HConnected && activeView === 'map' ? (
+            <ActivityMapView
+              activity={currentExercise}
+              activityType={activityType}
+              activityName={activityName}
+              attendees={attendees}
+              members={members}
+              isLoading={isLoading || isPulling}
+            />
           ) : (
-            <div ref={componentRef} className="operational-periods-wrapper" style={{ display: 'flex', flexDirection: 'column', gap: 32 }}>
-              {formState.periods && formState.periods.length > 1 ? (
-                formState.periods.map((period, pIdx) => {
-                  const isLastPeriod = pIdx === formState.periods!.length - 1;
-                  const periodFormState = {
-                    headers: period.headers,
-                    rows: period.rows,
-                  };
+            <>
+              {/* ── Config card ──────────────────────────────── */}
+              <div className="card no-print" style={{ padding: '18px 24px', marginBottom: 20 }}>
+                <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 16 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <FileText size={16} style={{ color: 'var(--slate-9)' }} />
+                    <span style={{ fontWeight: 600, fontSize: '0.9375rem', color: 'var(--slate-12)' }}>
+                      Form Builder
+                    </span>
+                    <span style={{ fontSize: '0.8125rem', color: 'var(--slate-10)' }}>· auto-saved locally</span>
+                  </div>
 
-                  return (
-                    <div
-                      key={period.id}
-                      className="operational-period-page"
-                      style={{
-                        pageBreakAfter: isLastPeriod ? 'auto' : 'always',
-                        breakAfter: isLastPeriod ? 'auto' : 'page',
-                      }}
-                    >
-                      {/* Period Label Banner on Screen */}
-                      <div className="no-print" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8, padding: '0 4px' }}>
-                        <span style={{ fontSize: '0.8125rem', fontWeight: 600, color: 'var(--slate-11)' }}>
-                          Operational Period {pIdx + 1} of {formState.periods!.length} · {(() => {
-                            try {
-                              const rawDate = period.id.startsWith('period_') ? period.id.replace('period_', '') : period.date;
-                              return format(new Date(rawDate.includes('-') ? `${rawDate}T12:00:00` : rawDate), 'EEE, MMM d');
-                            } catch {
-                              return period.date;
-                            }
-                          })()}
-                        </span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                    {/* Form type select */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <Label.Root style={{ fontSize: '0.8125rem', fontWeight: 500, color: 'var(--slate-11)', whiteSpace: 'nowrap' }}>
+                        Form Type
+                      </Label.Root>
+                      <Select.Root value={formType} onValueChange={handleFormTypeChange}>
+                        <Select.Trigger className="select-trigger">
+                          <Select.Value />
+                          <Select.Icon><ChevronDown size={14} /></Select.Icon>
+                        </Select.Trigger>
+                        <Select.Portal>
+                          <Select.Content className="select-content" position="popper" sideOffset={6}>
+                            <Select.Viewport>
+                              {FORM_TYPES.map(ft => (
+                                <Select.Item key={ft.value} value={ft.value} className="select-item">
+                                  <Select.ItemText>{ft.label}</Select.ItemText>
+                                  <Select.ItemIndicator style={{ marginLeft: 'auto' }}>
+                                    <Check size={13} style={{ color: 'var(--indigo-9)' }} />
+                                  </Select.ItemIndicator>
+                                </Select.Item>
+                              ))}
+                            </Select.Viewport>
+                          </Select.Content>
+                        </Select.Portal>
+                      </Select.Root>
+                    </div>
+
+                    {/* Data-driven column toggles dropdown */}
+                    <DropdownMenu.Root>
+                      <DropdownMenu.Trigger asChild>
+                        <button className="select-trigger" style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, width: 'auto' }}>
+                          <span>Columns</span>
+                          <ChevronDown size={14} />
+                        </button>
+                      </DropdownMenu.Trigger>
+
+                      <DropdownMenu.Portal>
+                        <DropdownMenu.Content
+                          className="select-content"
+                          align="start"
+                          sideOffset={6}
+                          style={{ padding: 4, width: 'max-content' }}
+                        >
+                          {COLUMN_TOGGLES.map(({ key, label, icon: Icon, className }) => (
+                            <DropdownMenu.Item
+                              key={key}
+                              onSelect={(e) => { e.preventDefault(); toggleColumn(key); }}
+                              style={{
+                                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                                gap: 16, padding: '7px 10px', borderRadius: 6, cursor: 'pointer', outline: 'none',
+                                fontSize: '0.8125rem', color: 'var(--slate-12)',
+                              }}
+                              className={`select-item ${className || ''}`}
+                            >
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                <Icon size={14} style={{ color: 'var(--slate-9)' }} />
+                                {label}
+                              </div>
+                              <Switch.Root
+                                checked={columnFlags[key]}
+                                className="switch-root"
+                                style={{ pointerEvents: 'none' }}
+                              >
+                                <Switch.Thumb className="switch-thumb" />
+                              </Switch.Root>
+                            </DropdownMenu.Item>
+                          ))}
+                        </DropdownMenu.Content>
+                      </DropdownMenu.Portal>
+                    </DropdownMenu.Root>
+
+                    {/* Add rows (only shown when not multi-period, since multi-period pages have their own row buttons) */}
+                    {(!formState?.periods || formState.periods.length <= 1) && (
+                      <>
+                        <Separator.Root className="separator" style={{ width: 1, height: 20 }} orientation="vertical" />
                         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <Label.Root style={{ fontSize: '0.8125rem', fontWeight: 500, color: 'var(--slate-11)', whiteSpace: 'nowrap' }}>
+                            Add rows
+                          </Label.Root>
                           <button
                             className="btn btn-secondary btn-sm"
-                            style={{ fontSize: '0.75rem', padding: '3px 8px', height: 'auto' }}
-                            onClick={() => addBlankRows(1, pIdx)}
-                            title="Add 1 row"
+                            onClick={() => addBlankRows(1)}
                           >
-                            <Plus size={12} style={{ marginRight: 4 }} /> Add Row
+                            <Plus size={13} /> 1
                           </button>
                           <button
                             className="btn btn-secondary btn-sm"
-                            style={{ fontSize: '0.75rem', padding: '3px 8px', height: 'auto' }}
-                            onClick={() => addBlankRows(5, pIdx)}
-                            title="Add 5 rows"
+                            onClick={() => addBlankRows(5)}
                           >
-                            + 5 Rows
+                            <Plus size={13} /> 5
                           </button>
                         </div>
-                      </div>
+                      </>
+                    )}
+                  </div>
+                </div>
+              </div>
 
-                      {/* BUG FIX: pass activityType via renderForm instead of wrong typeLabel */}
-                      {renderForm({
-                        formState: periodFormState,
-                        onUpdateHeader: (key, val) => updateHeaderCell(key, val, pIdx),
-                        onUpdateRow: (rowId, colKey, val) => updateRowCell(rowId, colKey, val),
-                      })}
-                    </div>
-                  );
-                })
-              ) : (
-                <div>
-                  {renderForm({
-                    ref: componentRef,
-                    formState: formState,
-                    onUpdateHeader: updateHeaderCell,
-                    onUpdateRow: updateRowCell,
-                  })}
+              {/* ── Conflict banner ───────────────────────────── */}
+              {hasConflicts && (
+                <div
+                  className="no-print"
+                  style={{
+                    marginBottom: 16, padding: '12px 20px', borderRadius: 10,
+                    background: 'var(--red-3)', border: '1px solid var(--red-6)',
+                    display: 'flex', alignItems: 'flex-start', gap: 12,
+                  }}
+                >
+                  <AlertTriangle size={18} style={{ color: 'var(--red-10)', flexShrink: 0, marginTop: 1 }} />
+                  <div>
+                    <p style={{ fontWeight: 600, fontSize: '0.875rem', color: 'var(--red-12)', marginBottom: 2 }}>
+                      Merge Conflicts Detected
+                    </p>
+                    <p style={{ fontSize: '0.8125rem', color: 'var(--red-11)', lineHeight: 1.5 }}>
+                      Remote D4H changes conflict with your local edits. Hover over red cells to see remote values, or use the Changes menu to accept D4H values.
+                    </p>
+                  </div>
+                  <button className="btn btn-danger btn-sm" style={{ marginLeft: 'auto', flexShrink: 0 }} onClick={() => fixConflicts()}>
+                    Fix conflicts
+                  </button>
                 </div>
               )}
-            </div>
+
+              {/* ── Form ─────────────────────────────────────── */}
+              {isLoading ? (
+                <div className="no-print" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: 300, gap: 16 }}>
+                  <Loader2 size={36} style={{ color: 'var(--indigo-9)', animation: 'spin 1s linear infinite' }} />
+                  <p style={{ fontSize: '0.9375rem', color: 'var(--slate-10)', fontWeight: 500 }}>
+                    Loading roster data…
+                  </p>
+                </div>
+              ) : !formState ? (
+                <Navigate to="/" replace />
+              ) : (
+                <div ref={componentRef} className="operational-periods-wrapper" style={{ display: 'flex', flexDirection: 'column', gap: 32 }}>
+                  {formState.periods && formState.periods.length > 1 ? (
+                    formState.periods.map((period, pIdx) => {
+                      const isLastPeriod = pIdx === formState.periods!.length - 1;
+                      const periodFormState = {
+                        headers: period.headers,
+                        rows: period.rows,
+                      };
+
+                      return (
+                        <div
+                          key={period.id}
+                          className="operational-period-page"
+                          style={{
+                            pageBreakAfter: isLastPeriod ? 'auto' : 'always',
+                            breakAfter: isLastPeriod ? 'auto' : 'page',
+                          }}
+                        >
+                          {/* Period Label Banner on Screen */}
+                          <div className="no-print" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8, padding: '0 4px' }}>
+                            <span style={{ fontSize: '0.8125rem', fontWeight: 600, color: 'var(--slate-11)' }}>
+                              Operational Period {pIdx + 1} of {formState.periods!.length} · {(() => {
+                                try {
+                                  const rawDate = period.id.startsWith('period_') ? period.id.replace('period_', '') : period.date;
+                                  return format(new Date(rawDate.includes('-') ? `${rawDate}T12:00:00` : rawDate), 'EEE, MMM d');
+                                } catch {
+                                  return period.date;
+                                }
+                              })()}
+                            </span>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                              <button
+                                className="btn btn-secondary btn-sm"
+                                style={{ fontSize: '0.75rem', padding: '3px 8px', height: 'auto' }}
+                                onClick={() => addBlankRows(1, pIdx)}
+                                title="Add 1 row"
+                              >
+                                <Plus size={12} style={{ marginRight: 4 }} /> Add Row
+                              </button>
+                              <button
+                                className="btn btn-secondary btn-sm"
+                                style={{ fontSize: '0.75rem', padding: '3px 8px', height: 'auto' }}
+                                onClick={() => addBlankRows(5, pIdx)}
+                                title="Add 5 rows"
+                              >
+                                + 5 Rows
+                              </button>
+                            </div>
+                          </div>
+
+                          {/* BUG FIX: pass activityType via renderForm instead of wrong typeLabel */}
+                          {renderForm({
+                            formState: periodFormState,
+                            onUpdateHeader: (key, val) => updateHeaderCell(key, val, pIdx),
+                            onUpdateRow: (rowId, colKey, val) => updateRowCell(rowId, colKey, val),
+                          })}
+                        </div>
+                      );
+                    })
+                  ) : (
+                    <div>
+                      {renderForm({
+                        ref: componentRef,
+                        formState: formState,
+                        onUpdateHeader: updateHeaderCell,
+                        onUpdateRow: updateRowCell,
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+            </>
           )}
         </main>
 

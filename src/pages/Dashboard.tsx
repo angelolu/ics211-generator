@@ -34,7 +34,7 @@ import {
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { formatActivityLocation, getActivities, getCurrentUserAttendingActivityIds, logCurrentUserInfo } from '../api/d4h';
+import { formatActivityLocation, getActivities, getCurrentUserAttendingActivityIds, getCurrentUserMemberInfo, getD4HErrorMessage, logCurrentUserInfo } from '../api/d4h';
 import type { Activity } from '../api/d4h';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { ActivityPopover } from '../components/ActivityPopover';
@@ -74,15 +74,14 @@ export function Dashboard() {
     }
   });
   const [contextId, setContextId] = useState(localStorage.getItem('d4h_context_id'));
+  const [userName, setUserName] = useState(() => localStorage.getItem('d4h_member_name') || '');
   const [viewMode, setViewMode] = useState<'activities' | 'local'>(() => {
     if (!contextId) return 'local';
     const saved = localStorage.getItem('fitnessqual_view_mode');
     return (saved === 'activities' || saved === 'local') ? saved : 'activities';
   });
-  const [activitiesView, setActivitiesView] = useState<'list' | 'calendar'>(() => {
-    const saved = localStorage.getItem('fitnessqual_d4h_activities_view');
-    return (saved === 'calendar' || saved === 'list') ? saved : 'calendar';
-  });
+  const [activitiesView, setActivitiesView] = useState<'list' | 'calendar'>('calendar');
+  const effectiveActivitiesView = activitiesView;
   const [currentMonth, setCurrentMonth] = useState<Date>(new Date());
   const [attendingActivityIds, setAttendingActivityIds] = useState<Set<number>>(new Set());
 
@@ -107,12 +106,13 @@ export function Dashboard() {
   useEffect(() => {
     if (contextId) {
       logCurrentUserInfo();
+      getCurrentUserMemberInfo(contextId).then(info => {
+        if (info?.name) {
+          setUserName(info.name);
+        }
+      });
     }
   }, [contextId]);
-
-  useEffect(() => {
-    localStorage.setItem('fitnessqual_d4h_activities_view', activitiesView);
-  }, [activitiesView]);
 
   const handleCreateLocalRoster = () => {
     try {
@@ -154,16 +154,18 @@ export function Dashboard() {
 
       getCurrentUserAttendingActivityIds(contextIdNum, options)
         .then(ids => setAttendingActivityIds(ids))
-        .catch(() => {});
+        .catch(() => { });
     } catch (err: any) {
       if (err.response?.status === 401 || err.response?.status === 403) {
         localStorage.removeItem('d4h_token');
         localStorage.removeItem('d4h_context_id');
         localStorage.removeItem('d4h_member_id');
         localStorage.removeItem('d4h_member_name');
-        navigate('/login');
+        setContextId(null);
+        setViewMode('local');
+        setError('D4H session expired or invalid. Switched to offline mode.');
       } else {
-        setError('Failed to load activities. Please try again.');
+        setError(getD4HErrorMessage(err, 'Failed to load activities. Please try again.'));
       }
     } finally {
       setIsLoading(false);
@@ -183,6 +185,15 @@ export function Dashboard() {
     return () => window.removeEventListener('focus', handleWindowFocus);
   }, [contextId, activitiesView, currentMonth]);
 
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (contextId) {
+        load(true, activitiesView, currentMonth);
+      }
+    }, 5 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, [contextId, activitiesView, currentMonth]);
+
   const filtered = activities.filter(a => filter === 'all' || a.type === filter);
   const totalPages = Math.ceil(filtered.length / ITEMS_PER_PAGE);
   const paginated = filtered.slice((currentPage - 1) * ITEMS_PER_PAGE, currentPage * ITEMS_PER_PAGE);
@@ -197,7 +208,6 @@ export function Dashboard() {
   return (
     <Tooltip.Provider delayDuration={400}>
       <div className="app-bg" style={{ minHeight: '100vh' }}>
-
         {/* ── Header ───────────────────────────────────────── */}
         <header className="app-header">
           <div style={{ maxWidth: 1100, margin: '0 auto', padding: '0 24px', height: 60, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -213,10 +223,10 @@ export function Dashboard() {
               </div>
               <div>
                 <div style={{ fontWeight: 700, fontSize: '0.9375rem', color: 'white', lineHeight: 1.2 }}>
-                  {teamTitle}
+                  ICS 211
                 </div>
                 <div style={{ fontSize: '0.7rem', color: 'rgba(220,195,148,0.7)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-                  ICS 211 Roster Generator
+                  Roster Generator
                 </div>
               </div>
             </div>
@@ -234,7 +244,7 @@ export function Dashboard() {
                       borderRadius: 7,
                     }}
                   >
-                    {contextId ? 'D4H connected' : 'D4H disconnected'}
+                    {contextId ? 'D4H' : 'D4H disconnected'}
                     <ChevronDown size={14} />
                   </button>
                 </DropdownMenu.Trigger>
@@ -243,36 +253,91 @@ export function Dashboard() {
                     className="select-content"
                     align="end"
                     sideOffset={6}
-                    style={{ padding: 4, minWidth: 200, zIndex: 100 }}
+                    style={{ padding: 4, minWidth: 220, zIndex: 100 }}
                   >
-                    <DropdownMenu.Item
-                      onSelect={() => window.open('https://team-manager.us.d4h.com/', '_blank')}
-                      style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', borderRadius: 6, cursor: 'pointer', outline: 'none', fontSize: '0.875rem', color: 'var(--slate-12)' }}
-                      className="select-item"
-                    >
-                      <ExternalLink size={14} />
-                      Go to D4H
-                    </DropdownMenu.Item>
+                    {contextId && (
+                      <>
+                        <DropdownMenu.Item
+                          onSelect={() => window.open('https://team-manager.us.d4h.com/', '_blank')}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            gap: 12,
+                            padding: '8px 12px',
+                            borderRadius: 6,
+                            cursor: 'pointer',
+                            outline: 'none',
+                          }}
+                          className="select-item"
+                        >
+                          <div style={{ minWidth: 0, flex: 1 }}>
+                            <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--slate-10)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                              Organization
+                            </div>
+                            <div style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--slate-12)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {teamTitle}
+                            </div>
+                          </div>
+                          <ExternalLink size={14} style={{ flexShrink: 0, opacity: 0.65 }} />
+                        </DropdownMenu.Item>
 
-                    <DropdownMenu.Separator style={{ height: 1, backgroundColor: 'var(--slate-4)', margin: '4px 0' }} />
+                        <DropdownMenu.Item
+                          onSelect={() => window.open('https://myaccount.us.d4h.com/', '_blank')}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            gap: 12,
+                            padding: '8px 12px',
+                            borderRadius: 6,
+                            cursor: 'pointer',
+                            outline: 'none',
+                          }}
+                          className="select-item"
+                        >
+                          <div style={{ minWidth: 0, flex: 1 }}>
+                            <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--slate-10)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                              Logged in
+                            </div>
+                            <div style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--slate-12)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {userName || 'Team Member'}
+                            </div>
+                          </div>
+                          <ExternalLink size={14} style={{ flexShrink: 0, opacity: 0.65 }} />
+                        </DropdownMenu.Item>
+
+                        <DropdownMenu.Separator style={{ height: 1, backgroundColor: 'var(--slate-5)', margin: '4px 0' }} />
+                      </>
+                    )}
 
                     <DropdownMenu.Item
                       onSelect={() => {
                         if (contextId) {
-                          ['d4h_token', 'd4h_context_id', 'd4h_team_title'].forEach(k => localStorage.removeItem(k));
+                          ['d4h_token', 'd4h_context_id', 'd4h_team_title', 'd4h_member_id', 'd4h_member_name', 'd4h_team_subdomain'].forEach(k => localStorage.removeItem(k));
                           localStorage.setItem('d4h_skip_login', 'true');
                           setContextId(null);
+                          setUserName('');
                           setViewMode('local');
                         } else {
-                          localStorage.removeItem('d4h_skip_login');
-                          navigate('/login');
+                          navigate('/connect-d4h');
                         }
                       }}
-                      style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', borderRadius: 6, cursor: 'pointer', outline: 'none', fontSize: '0.875rem', color: contextId ? 'var(--red-11)' : 'var(--slate-12)' }}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 8,
+                        padding: '8px 12px',
+                        borderRadius: 6,
+                        cursor: 'pointer',
+                        outline: 'none',
+                        fontSize: '0.875rem',
+                        color: contextId ? 'var(--red-11)' : 'var(--slate-12)',
+                      }}
                       className="select-item"
                     >
                       {contextId ? <LogOut size={14} /> : <LogIn size={14} />}
-                      {contextId ? 'Disconnect' : 'Connect'}
+                      {contextId ? 'Disconnect D4H' : 'Connect D4H'}
                     </DropdownMenu.Item>
                   </DropdownMenu.Content>
                 </DropdownMenu.Portal>
@@ -282,11 +347,11 @@ export function Dashboard() {
         </header>
 
         {/* ── Main ─────────────────────────────────────────── */}
-        <main style={{ maxWidth: 1100, margin: '0 auto', padding: '32px 24px' }}>
+        <main className="dashboard-main" style={{ maxWidth: 1100, margin: '0 auto', padding: '20px 24px 32px' }}>
 
           {/* Page title + filter bar */}
-          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 16, marginBottom: 28 }}>
-            <div>
+          <div className="dashboard-controls" style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 16 }}>
+            <div className="dashboard-switcher-row">
               {contextId ? (
                 <ToggleGroup.Root
                   type="single"
@@ -309,20 +374,20 @@ export function Dashboard() {
             </div>
 
             {viewMode === 'activities' ? (
-              <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 12 }}>
+              <div className="dashboard-filter-row" style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 12 }}>
                 <ToggleGroup.Root
                   type="single"
                   value={activitiesView}
                   onValueChange={(v) => { if (v) setActivitiesView(v as 'list' | 'calendar'); }}
-                  className="toggle-group"
+                  className="toggle-group activities-view-toggle"
                 >
-                  <ToggleGroup.Item value="list" className="toggle-item" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <List size={14} />
-                    <span>List</span>
-                  </ToggleGroup.Item>
                   <ToggleGroup.Item value="calendar" className="toggle-item" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                     <Calendar size={14} />
                     <span>Calendar</span>
+                  </ToggleGroup.Item>
+                  <ToggleGroup.Item value="list" className="toggle-item" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <List size={14} />
+                    <span>List</span>
                   </ToggleGroup.Item>
                 </ToggleGroup.Root>
 
@@ -364,7 +429,7 @@ export function Dashboard() {
           {/* Content */}
           {viewMode === 'activities' ? (
             isLoading ? (
-              activitiesView === 'calendar' ? (
+              effectiveActivitiesView === 'calendar' ? (
                 <CalendarSkeleton currentMonth={currentMonth} />
               ) : (
                 <div style={{ display: 'grid', gap: 12 }}>
@@ -385,7 +450,7 @@ export function Dashboard() {
                 <p style={{ color: 'var(--red-11)', fontWeight: 600, marginBottom: 16 }}>{error}</p>
                 <button className="btn btn-secondary" onClick={() => load()}>Try Again</button>
               </div>
-            ) : activitiesView === 'calendar' ? (
+            ) : effectiveActivitiesView === 'calendar' ? (
               <CalendarView
                 activities={filtered}
                 currentMonth={currentMonth}
@@ -417,6 +482,7 @@ export function Dashboard() {
                     <ActivityCard
                       key={`${activity.type}-${activity.id}`}
                       activity={activity}
+                      isAttending={attendingActivityIds.has(activity.id)}
                       idx={idx}
                       onClick={() => navigate(`/exercise/${activity.id}`, { state: { exercise: activity } })}
                     />
@@ -494,16 +560,19 @@ export function Dashboard() {
                   return (
                     <div
                       key={roster.id}
-                      className="card card-interactive animate-slide-up"
+                      className="card card-interactive activity-card animate-slide-up"
                       style={{ padding: '16px 20px', display: 'flex', alignItems: 'center', gap: 16, animationDelay: `${idx * 30}ms`, animationFillMode: 'both' }}
                       onClick={() => navigate(`/exercise/${roster.id}`, { state: { exercise: roster } })}
                     >
-                      <div style={{
-                        minWidth: 56, height: 56, borderRadius: 12,
-                        background: '#F0FDF4', border: '1px solid #BBF7D0',
-                        display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-                        flexShrink: 0,
-                      }}>
+                      <div
+                        className="activity-card-date"
+                        style={{
+                          minWidth: 56, height: 56, borderRadius: 12,
+                          background: '#F0FDF4', border: '1px solid #BBF7D0',
+                          display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+                          flexShrink: 0,
+                        }}
+                      >
                         <div style={{ fontSize: '0.6875rem', fontWeight: 700, color: '#166534', textTransform: 'uppercase', letterSpacing: '0.06em', lineHeight: 1 }}>
                           {format(displayDate, 'MMM')}
                         </div>
@@ -513,7 +582,7 @@ export function Dashboard() {
                       </div>
 
                       <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 5 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 5, flexWrap: 'wrap' }}>
                           <span className="badge" style={{ background: '#DCFCE7', color: '#166534', border: '1px solid #BBF7D0' }}>Local</span>
                           <span style={{ fontWeight: 600, fontSize: '0.9375rem', color: 'var(--slate-12)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                             {title}
@@ -522,18 +591,21 @@ export function Dashboard() {
                         <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
                           <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: '0.8125rem', color: 'var(--slate-10)' }}>
                             <Calendar size={13} />
-                            <span>{format(new Date(roster.createdAt), 'HHmm')}</span>
+                            <span>{format(displayDate, 'yyyy-MM-dd HH:mm')}</span>
                           </div>
                         </div>
                       </div>
 
-                      <div style={{
-                        width: 32, height: 32, borderRadius: 8,
-                        background: 'var(--slate-3)', border: '1px solid var(--slate-5)',
-                        display: 'flex', alignItems: 'center', justifyContent: 'center',
-                        flexShrink: 0, color: 'var(--slate-9)',
-                        transition: 'all 0.15s',
-                      }}>
+                      <div
+                        className="activity-card-chevron"
+                        style={{
+                          width: 32, height: 32, borderRadius: 8,
+                          background: 'var(--slate-3)', border: '1px solid var(--slate-5)',
+                          display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          flexShrink: 0, color: 'var(--slate-9)',
+                          transition: 'all 0.15s',
+                        }}
+                      >
                         <ChevronRight size={16} />
                       </div>
                     </div>
@@ -808,100 +880,89 @@ function CalendarView({
         ))}
       </div>
 
-      {/* Stack of week rows */}
+      {/* Grid of week rows with multi-day events */}
       <div>
-        {weeks.map((week, weekIdx) => {
-          const weekStart = startOfDay(week[0]);
-          const weekEnd = startOfDay(week[6]);
+        {weeks.map((weekDays, weekIdx) => {
+          // Find all segments for this week
+          const weekStart = weekDays[0];
+          const weekEnd = weekDays[6];
 
-          // Find activities that intersect with this week
-          interface Segment {
+          interface LayoutSegment {
             activity: Activity;
-            rawStart: Date;
-            rawEnd: Date;
             startCol: number;
-            endCol: number;
             span: number;
             isStart: boolean;
             isEnd: boolean;
             slot: number;
           }
 
-          const segments: Segment[] = [];
+          const rawSegments: Omit<LayoutSegment, 'slot'>[] = [];
 
-          normalizedActivities.forEach(({ activity, rawStart, rawEnd, startDay, endDay }) => {
-            // Check intersection with the current week
+          normalizedActivities.forEach(({ activity, startDay, endDay }) => {
+            // Check if activity overlaps with this week
             if (startDay <= weekEnd && endDay >= weekStart) {
-              const startCol = startDay < weekStart ? 0 : differenceInCalendarDays(startDay, weekStart);
-              const endCol = endDay > weekEnd ? 6 : differenceInCalendarDays(endDay, weekStart);
-              const span = Math.max(1, endCol - startCol + 1);
-              const isStart = isSameDay(startDay, week[startCol]);
-              const isEnd = isSameDay(endDay, week[endCol]);
+              const segStart = startDay < weekStart ? weekStart : startDay;
+              const segEnd = endDay > weekEnd ? weekEnd : endDay;
+              const startCol = differenceInCalendarDays(segStart, weekStart);
+              const span = differenceInCalendarDays(segEnd, segStart) + 1;
+              const isStart = isSameDay(startDay, segStart);
+              const isEnd = isSameDay(endDay, segEnd);
 
-              segments.push({
+              rawSegments.push({
                 activity,
-                rawStart,
-                rawEnd,
                 startCol,
-                endCol,
                 span,
                 isStart,
                 isEnd,
-                slot: 0,
               });
             }
           });
 
-          // Sort segments: longer span first, then earlier startCol, then earlier rawStart, then ID
-          segments.sort((a, b) => {
-            if (b.span !== a.span) return b.span - a.span;
+          // Sort segments: earlier start col first, longer span first
+          rawSegments.sort((a, b) => {
             if (a.startCol !== b.startCol) return a.startCol - b.startCol;
-            if (a.rawStart.getTime() !== b.rawStart.getTime()) {
-              return a.rawStart.getTime() - b.rawStart.getTime();
-            }
-            return a.activity.id - b.activity.id;
+            return b.span - a.span;
           });
 
-          // Allocate slots so no overlapping columns share the same vertical slot
-          const occupiedSlots: boolean[][] = [];
-          segments.forEach(segment => {
+          // Assign vertical slots (greedy interval coloring)
+          const slotOccupied: boolean[][] = [];
+          const segments: LayoutSegment[] = [];
+
+          rawSegments.forEach(seg => {
             let slot = 0;
             while (true) {
-              if (!occupiedSlots[slot]) {
-                occupiedSlots[slot] = new Array(7).fill(false);
+              if (!slotOccupied[slot]) {
+                slotOccupied[slot] = new Array(7).fill(false);
               }
-              let free = true;
-              for (let c = segment.startCol; c <= segment.endCol; c++) {
-                if (occupiedSlots[slot][c]) {
-                  free = false;
+              let collision = false;
+              for (let c = seg.startCol; c < seg.startCol + seg.span; c++) {
+                if (slotOccupied[slot][c]) {
+                  collision = true;
                   break;
                 }
               }
-              if (free) {
-                for (let c = segment.startCol; c <= segment.endCol; c++) {
-                  occupiedSlots[slot][c] = true;
+              if (!collision) {
+                for (let c = seg.startCol; c < seg.startCol + seg.span; c++) {
+                  slotOccupied[slot][c] = true;
                 }
-                segment.slot = slot;
+                segments.push({ ...seg, slot });
                 break;
               }
               slot++;
             }
           });
 
-          const maxSlots = segments.length > 0 ? Math.max(...segments.map(s => s.slot)) + 1 : 0;
-          const isLastWeek = weekIdx === weeks.length - 1;
-
           return (
             <div
-              key={week[0].toISOString()}
+              key={weekIdx}
               style={{
                 position: 'relative',
-                minHeight: Math.max(110, 36 + maxSlots * 28 + 8),
-                borderBottom: isLastWeek ? 'none' : '1px solid var(--slate-3)',
+                minHeight: 110,
+                borderBottom: weekIdx === weeks.length - 1 ? 'none' : '1px solid var(--slate-3)',
                 background: 'white',
               }}
             >
-              {/* Day cells background & day number header */}
+              {/* Day Cells Background Layer */}
               <div
                 style={{
                   position: 'absolute',
@@ -911,27 +972,24 @@ function CalendarView({
                   pointerEvents: 'none',
                 }}
               >
-                {week.map((day, dayIdx) => {
-                  const inMonth = isSameMonth(day, currentMonth);
+                {weekDays.map((day, dayIdx) => {
                   const today = isToday(day);
-                  const isLastCol = dayIdx === 6;
+                  const inMonth = isSameMonth(day, currentMonth);
 
                   return (
                     <div
-                      key={day.toISOString()}
+                      key={dayIdx}
                       style={{
-                        height: '100%',
-                        borderRight: isLastCol ? 'none' : '1px solid var(--slate-3)',
-                        background: today ? '#F0F7FF' : inMonth ? 'white' : 'var(--slate-1)',
-                        padding: '8px',
+                        borderRight: dayIdx === 6 ? 'none' : '1px solid var(--slate-3)',
+                        background: today ? 'var(--gold-1)' : inMonth ? 'white' : 'var(--slate-1)',
+                        padding: '6px 8px',
                         boxSizing: 'border-box',
-                        opacity: inMonth ? 1 : 0.55,
                       }}
                     >
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <div style={{ display: 'flex', justifyContent: 'flex-start', alignItems: 'center' }}>
                         <span
                           style={{
-                            fontSize: '0.8125rem',
+                            fontSize: '0.75rem',
                             fontWeight: today ? 800 : inMonth ? 600 : 400,
                             color: today ? 'white' : inMonth ? 'var(--slate-12)' : 'var(--slate-8)',
                             background: today ? 'var(--navy-9)' : 'transparent',
@@ -1041,7 +1099,17 @@ function CalendarView({
   );
 }
 
-function ActivityCard({ activity, idx, onClick }: { activity: Activity; idx: number; onClick: () => void }) {
+function ActivityCard({
+  activity,
+  isAttending,
+  idx,
+  onClick,
+}: {
+  activity: Activity;
+  isAttending?: boolean;
+  idx: number;
+  onClick: () => void;
+}) {
   const startDate = new Date(activity.startsAt);
   const endDate = new Date(activity.endsAt);
 
@@ -1056,7 +1124,7 @@ function ActivityCard({ activity, idx, onClick }: { activity: Activity; idx: num
 
   return (
     <div
-      className="card card-interactive animate-slide-up"
+      className="card card-interactive activity-card animate-slide-up"
       style={{
         padding: '16px 20px',
         display: 'flex',
@@ -1070,33 +1138,85 @@ function ActivityCard({ activity, idx, onClick }: { activity: Activity; idx: num
       onClick={onClick}
     >
       {/* Date block */}
-      <div style={{
-        minWidth: 56, height: 56, borderRadius: 12,
-        background: isPast ? 'var(--slate-3)' : '#EEF2FF',
-        border: isPast ? '1px solid var(--slate-5)' : '1px solid #C7D2FE',
-        display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-        flexShrink: 0,
-      }}>
-        <div style={{ fontSize: '0.6875rem', fontWeight: 700, color: isPast ? 'var(--slate-10)' : '#1a4480', textTransform: 'uppercase', letterSpacing: '0.06em', lineHeight: 1 }}>
+      <div
+        className="activity-card-date"
+        style={{
+          minWidth: 56,
+          height: 56,
+          borderRadius: 12,
+          background: isPast ? 'var(--slate-3)' : '#EEF2FF',
+          border: isPast ? '1px solid var(--slate-5)' : '1px solid #C7D2FE',
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          flexShrink: 0,
+        }}
+      >
+        <div
+          style={{
+            fontSize: '0.6875rem',
+            fontWeight: 700,
+            color: isPast ? 'var(--slate-10)' : '#1a4480',
+            textTransform: 'uppercase',
+            letterSpacing: '0.06em',
+            lineHeight: 1,
+          }}
+        >
           {format(startDate, 'MMM')}
         </div>
-        <div style={{ fontSize: '1.375rem', fontWeight: 800, color: isPast ? 'var(--slate-11)' : '#061B44', lineHeight: 1.1 }}>
+        <div
+          style={{
+            fontSize: '1.375rem',
+            fontWeight: 800,
+            color: isPast ? 'var(--slate-11)' : '#061B44',
+            lineHeight: 1.1,
+          }}
+        >
           {format(startDate, 'd')}
         </div>
       </div>
 
       {/* Info */}
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 5 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 5, flexWrap: 'wrap' }}>
           {!isPast && <div className={dotClass} />}
           <span className={badgeClass} style={isPast ? { opacity: 0.8 } : {}}>{TYPE_LABELS[activity.type]}</span>
           {isPast && (
-            <span style={{
-              background: 'var(--slate-4)', color: 'var(--slate-11)',
-              fontSize: '0.65rem', fontWeight: 800, textTransform: 'uppercase',
-              padding: '2px 6px', borderRadius: 4, letterSpacing: '0.04em'
-            }}>
+            <span
+              style={{
+                background: 'var(--slate-4)',
+                color: 'var(--slate-11)',
+                fontSize: '0.65rem',
+                fontWeight: 800,
+                textTransform: 'uppercase',
+                padding: '2px 6px',
+                borderRadius: 4,
+                letterSpacing: '0.04em',
+              }}
+            >
               Past
+            </span>
+          )}
+          {isAttending && (
+            <span
+              style={{
+                height: 20,
+                padding: '0 6px',
+                borderRadius: 4,
+                fontSize: '0.6875rem',
+                fontWeight: 700,
+                color: 'var(--navy-9)',
+                background: 'var(--navy-1)',
+                border: '1px solid var(--navy-3)',
+                letterSpacing: '0.04em',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 4,
+              }}
+            >
+              <UserCheck size={11} strokeWidth={2.5} style={{ color: 'var(--navy-8)' }} />
+              {isPast ? 'Attended' : 'Attending'}
             </span>
           )}
           <span style={{ fontWeight: 600, fontSize: '0.9375rem', color: 'var(--slate-12)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
@@ -1124,13 +1244,22 @@ function ActivityCard({ activity, idx, onClick }: { activity: Activity; idx: num
       </div>
 
       {/* Chevron */}
-      <div style={{
-        width: 32, height: 32, borderRadius: 8,
-        background: 'var(--slate-3)', border: '1px solid var(--slate-5)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        flexShrink: 0, color: 'var(--slate-9)',
-        transition: 'all 0.15s',
-      }}>
+      <div
+        className="activity-card-chevron"
+        style={{
+          width: 32,
+          height: 32,
+          borderRadius: 8,
+          background: 'var(--slate-3)',
+          border: '1px solid var(--slate-5)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          flexShrink: 0,
+          color: 'var(--slate-9)',
+          transition: 'all 0.15s',
+        }}
+      >
         <ChevronRight size={16} />
       </div>
     </div>

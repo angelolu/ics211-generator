@@ -19,25 +19,34 @@ const TYPE_LABELS: Record<string, string> = {
 };
 
 /**
- * Strips all HTML tags and collapses multiple spaces/linebreaks into a single space.
+ * Strips HTML tags and decodes entities while preserving intentional line breaks.
  */
 export function cleanDescription(htmlOrText?: string): string {
   if (!htmlOrText) return '';
 
-  const withSpaces = htmlOrText
-    .replace(/<br\s*\/?>/gi, ' ')
-    .replace(/<\/(p|div|li|tr|h[1-6])>/gi, ' ')
-    .replace(/<[^>]*>/g, ' ');
+  const withLineBreaks = htmlOrText
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/(p|div|h[1-6])>/gi, '\n\n')
+    .replace(/<\/(tr|li)>/gi, '\n')
+    .replace(/<li[^>]*>/gi, '• ')
+    .replace(/<[^>]*>/g, '');
 
-  const decoded = withSpaces
+  const decoded = withLineBreaks
     .replace(/&nbsp;/gi, ' ')
     .replace(/&amp;/gi, '&')
     .replace(/&lt;/gi, '<')
     .replace(/&gt;/gi, '>')
     .replace(/&quot;/gi, '"')
-    .replace(/&#39;|&apos;/gi, "'");
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/&bull;/gi, '•');
 
-  return decoded.replace(/\s+/g, ' ').trim();
+  return decoded
+    .replace(/\r\n|\r/g, '\n')
+    .split('\n')
+    .map((line) => line.replace(/[^\S\n]+/g, ' ').trim())
+    .join('\n')
+    .replace(/\n{2,}/g, '\n')
+    .trim();
 }
 
 interface ActivityPopoverProps {
@@ -215,6 +224,7 @@ export const ActivityPopover: React.FC<ActivityPopoverProps> = ({
               lineHeight: 1.45,
               maxHeight: 75,
               overflowY: 'auto',
+              whiteSpace: 'pre-wrap',
             }}>
               {cleanedDesc.length > 200 ? `${cleanedDesc.slice(0, 200).trim()}...` : cleanedDesc}
             </div>

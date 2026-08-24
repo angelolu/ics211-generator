@@ -1,7 +1,7 @@
 import axios from 'axios';
 
 const BASE_URL = 'https://api.team-manager.us.d4h.com/v3';
-const CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes for members and qualifications
+const CACHE_TTL_MS = 60 * 60 * 1000; // 60 minutes for members and qualifications (per AGENTS.md)
 const ACTIVITIES_CACHE_TTL_MS = 15 * 60 * 1000; // 15 minutes for activity lists
 
 // In-flight promise cache to deduplicate simultaneous requests
@@ -36,10 +36,10 @@ api.interceptors.response.use(
       localStorage.removeItem('d4h_context_id');
       localStorage.removeItem('d4h_team_title');
 
-      if (!window.location.pathname.includes('/login')) {
+      if (!window.location.pathname.includes('/connect-d4h')) {
         const baseUrl = import.meta.env.BASE_URL || '/';
-        const loginUrl = (baseUrl.endsWith('/') ? baseUrl : baseUrl + '/') + 'login';
-        window.location.href = loginUrl;
+        const connectUrl = (baseUrl.endsWith('/') ? baseUrl : baseUrl + '/') + 'connect-d4h';
+        window.location.href = connectUrl;
       }
       return Promise.reject(error);
     }
@@ -58,6 +58,49 @@ api.interceptors.response.use(
     return Promise.reject(error);
   }
 );
+
+export function getD4HErrorMessage(err: any, fallback = 'Failed to connect to D4H'): string {
+  if (!err) return fallback;
+
+  // Explicit message provided in D4H response body
+  const serverMsg = err.response?.data?.message || err.response?.data?.error || err.response?.data?.error_description;
+  if (serverMsg && typeof serverMsg === 'string' && serverMsg.trim()) {
+    return serverMsg;
+  }
+
+  // HTTP status code handling
+  const status = err.response?.status;
+  if (status === 401) {
+    return 'Invalid or expired personal access token. Please verify your token at myaccount.us.d4h.com and try again.';
+  }
+  if (status === 403) {
+    return 'Access forbidden. Your D4H token does not have permission to access this team or resource.';
+  }
+  if (status === 404) {
+    return 'D4H resource or team organization not found. Please verify your account configuration.';
+  }
+  if (status === 429) {
+    return 'D4H API rate limit reached. Please wait a few seconds and try again.';
+  }
+  if (status >= 500) {
+    return 'D4H servers returned an error. Please try again in a few moments.';
+  }
+
+  // Axios network error / CORS / Connection error
+  if (err.message === 'Network Error' || err.code === 'ERR_NETWORK') {
+    return 'There was an error. This can happen if the token is invalid, your device is offline, or the connection was blocked.';
+  }
+  if (err.code === 'ECONNABORTED' || err.message?.toLowerCase().includes('timeout')) {
+    return 'Request to D4H timed out. Please check your internet connection and try again.';
+  }
+
+  // Custom client-side Error instance
+  if (err.message && typeof err.message === 'string' && err.message !== 'Network Error') {
+    return err.message;
+  }
+
+  return fallback;
+}
 
 export interface WhoAmIResponse {
   id?: number;
@@ -173,6 +216,117 @@ export interface Member {
   home?: { phone?: string };
   work?: { phone?: string };
   pager?: { phone?: string };
+  address?: {
+    street?: string;
+    town?: string;
+    region?: string;
+    postcode?: string;
+    country?: string;
+  };
+  deprecatedAddress?: string;
+  location?: {
+    type?: string;
+    coordinates?: number[]; // [lng, lat]
+  };
+  customFieldValues?: {
+    customField: {
+      id: number;
+      title?: string;
+      type: string;
+      [key: string]: any;
+    };
+    value: any;
+  }[];
+}
+
+/**
+ * Checks if a member is out-of-state or international based on their D4H custom fields or address.
+ */
+export function isMemberOutOfStateOrCountry(member?: Partial<Member>): boolean {
+  if (!member) return false;
+
+  // 1. Check Region custom field (ID 6328)
+  if (Array.isArray(member.customFieldValues)) {
+    const regionEntry = member.customFieldValues.find(
+      cf => cf.customField?.id === 6328 || cf.customField?.title?.toLowerCase().includes('region')
+    );
+    if (regionEntry && regionEntry.value) {
+      const valArr = Array.isArray(regionEntry.value) ? regionEntry.value : [regionEntry.value];
+      // 14814 = "Other State", 14815 = "Other Country"
+      if (valArr.includes(14814) || valArr.includes(14815)) {
+        return true;
+      }
+    }
+  }
+
+  // 2. Check international postal codes (e.g. Canadian "V5T 3R8")
+  if (Array.isArray(member.customFieldValues)) {
+    const zipEntry = member.customFieldValues.find(
+      cf => cf.customField?.id === 5778 || cf.customField?.title?.toLowerCase().includes('zip')
+    );
+    if (zipEntry && zipEntry.value) {
+      const zipStr = String(zipEntry.value).trim();
+      // Canadian postal code pattern: Letter-Digit-Letter Digit-Letter-Digit
+      if (/^[A-Z]\d[A-Z]/i.test(zipStr)) {
+        return true;
+      }
+    }
+  }
+
+  // 3. Check address country if specified
+  if (member.address?.country) {
+    const c = member.address.country.trim().toLowerCase();
+    if (c && c !== 'usa' && c !== 'us' && c !== 'united states' && c !== 'united states of america') {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Extracts the best geocodable location query (address, zip code, or region) from a D4H Member object.
+ * Returns empty string if the member is out of state/area or has no location.
+ */
+export function getMemberLocationQuery(member?: Partial<Member>): string {
+  if (!member) return '';
+
+  // Skip out-of-state or international members
+  if (isMemberOutOfStateOrCountry(member)) {
+    return '';
+  }
+
+  // 1. Check deprecatedAddress
+  if (member.deprecatedAddress && typeof member.deprecatedAddress === 'string' && member.deprecatedAddress.trim()) {
+    return member.deprecatedAddress.trim();
+  }
+
+  // 2. Check structured address object
+  if (member.address) {
+    const parts = [
+      member.address.street,
+      member.address.town,
+      member.address.region,
+      member.address.postcode,
+      member.address.country,
+    ].filter(Boolean);
+    if (parts.length > 0) return parts.join(', ');
+  }
+
+  // 3. Check customFieldValues for Zip Code (Field ID 5778)
+  if (Array.isArray(member.customFieldValues)) {
+    const zipEntry = member.customFieldValues.find(
+      cf => cf.customField?.id === 5778 || cf.customField?.title?.toLowerCase().includes('zip')
+    );
+    if (zipEntry && zipEntry.value) {
+      const zipVal = String(zipEntry.value).trim();
+      if (zipVal && /^\d{5}/.test(zipVal)) {
+        return zipVal;
+      }
+    }
+  }
+
+  return '';
 }
 
 export const logCurrentUserInfo = async (): Promise<void> => {
@@ -514,47 +668,76 @@ export const getMemberDetails = async (contextId: number, memberIds: number[]): 
 
   const now = Date.now();
   const missingIds: number[] = [];
-  const results: Member[] = [];
 
   memberIds.forEach(id => {
     const cached = memberCache[id];
-    if (cached && now - cached.cachedAt < CACHE_TTL_MS && cached.data) {
-      results.push(cached.data);
-    } else {
+    if (!cached || now - cached.cachedAt >= CACHE_TTL_MS || !cached.data) {
       missingIds.push(id);
     }
   });
 
   if (missingIds.length === 0) {
-    return results;
+    return memberIds.map(id => memberCache[id]?.data).filter((m): m is Member => !!m);
   }
 
   const dedupeKey = `getMemberDetails_${contextId}_${missingIds.sort().join(',')}`;
   return dedupe(dedupeKey, async () => {
     try {
-      const res = await api.get<{ results: Member[] }>(`/team/${contextId}/members`, {
-        params: {
-          id: missingIds,
-          size: missingIds.length,
-        },
-      });
+      // 1. Fetch team members in bulk (up to 250 per page)
+      let page = 1;
+      let morePages = true;
+      while (morePages && page <= 3) {
+        const res = await api.get<{ results: Member[]; count?: number }>(`/team/${contextId}/members`, {
+          params: { size: 250, page },
+        }).catch((e) => {
+          console.warn(`[D4H API] Failed to fetch /team/${contextId}/members page ${page}:`, e);
+          return { data: { results: [], count: 0 } };
+        });
 
-      const fetchedMembers = res.data.results || [];
-      fetchedMembers.forEach(m => {
-        if (m.id) {
-          memberCache[m.id] = { data: m, cachedAt: Date.now() };
-          results.push(m);
+        const fetchedMembers = res.data.results || [];
+        fetchedMembers.forEach(m => {
+          if (m.id) {
+            memberCache[m.id] = { data: m, cachedAt: Date.now() };
+          }
+        });
+
+        // If we found all missing IDs or reached end of list, stop pagination
+        const stillMissing = missingIds.some(id => !memberCache[id]?.data);
+        if (!stillMissing || fetchedMembers.length < 250) {
+          morePages = false;
+        } else {
+          page++;
         }
-      });
+      }
+
+      // 2. For any remaining missing member IDs, fetch them individually as fallback
+      const remainingMissingIds = missingIds.filter(id => !memberCache[id]?.data);
+      if (remainingMissingIds.length > 0) {
+        console.info(`[D4H Member Details] Fetching ${remainingMissingIds.length} missing members individually:`, remainingMissingIds);
+        await Promise.allSettled(
+          remainingMissingIds.map(async (id) => {
+            try {
+              const res = await api.get<Member>(`/team/${contextId}/members/${id}`);
+              if (res.data && res.data.id) {
+                memberCache[res.data.id] = { data: res.data, cachedAt: Date.now() };
+              }
+            } catch (err) {
+              console.warn(`[D4H Member Details] Could not fetch member #${id}:`, err);
+            }
+          })
+        );
+      }
 
       try {
         localStorage.setItem(cacheKey, JSON.stringify(memberCache));
       } catch { }
     } catch (e) {
-      console.error('Error fetching member details:', e);
+      console.error('[D4H Member Details] Error fetching member details:', e);
     }
 
-    return results;
+    const resolvedResults = memberIds.map(id => memberCache[id]?.data).filter((m): m is Member => !!m);
+    console.log(`[D4H Member Details] Requested ${memberIds.length} members, resolved ${resolvedResults.length}:`, resolvedResults);
+    return resolvedResults;
   });
 };
 
@@ -673,3 +856,111 @@ export const getMemberQualifications = async (
     return { medicalMap, technicalMap };
   });
 };
+
+export const getUserAttendanceForActivity = async (
+  contextId: number,
+  activityId: number,
+  memberId: number
+): Promise<Attendee | null> => {
+  const dedupeKey = `getUserAttendance_${contextId}_${activityId}_${memberId}`;
+  return dedupe(dedupeKey, async () => {
+    try {
+      const res = await api.get<{ results: Attendee[] }>(`/team/${contextId}/attendance`, {
+        params: {
+          activity_id: activityId,
+          member_id: memberId,
+          size: 1,
+        },
+      });
+      return res.data.results?.[0] || null;
+    } catch (e) {
+      if (import.meta.env.DEV) {
+        console.warn('[D4H API] Failed to fetch user attendance for activity:', e);
+      }
+      return null;
+    }
+  });
+};
+
+export const updateUserAttendance = async (
+  contextId: number,
+  attendanceId: number,
+  status: 'ATTENDING' | 'ABSENT' | 'REQUESTED'
+): Promise<Attendee> => {
+  const res = await api.patch<Attendee>(`/team/${contextId}/attendance/${attendanceId}`, {
+    status,
+  });
+  userAttendanceCache.clear();
+  return res.data;
+};
+
+export const createUserAttendance = async (
+  contextId: number,
+  data: {
+    activityId: number;
+    memberId: number;
+    startsAt: string;
+    endsAt: string;
+    status: 'ATTENDING' | 'ABSENT' | 'REQUESTED';
+  }
+): Promise<Attendee> => {
+  const res = await api.post<Attendee>(`/team/${contextId}/attendance`, {
+    activityId: data.activityId,
+    memberId: data.memberId,
+    startsAt: data.startsAt,
+    endsAt: data.endsAt,
+    status: data.status,
+  });
+  userAttendanceCache.clear();
+  return res.data;
+};
+
+export interface UserPermissions {
+  canUpdateOwnAttendance: boolean;
+  canCreateAttendance: boolean;
+  canUpdateAllAttendance: boolean;
+  canUpdateExercise: boolean;
+  canUpdateIncident: boolean;
+  canUpdateEvent: boolean;
+  memberId: number | null;
+}
+
+export const getCurrentUserPermissions = async (
+  contextId?: number | string
+): Promise<UserPermissions> => {
+  try {
+    const res = await api.get<WhoAmIResponse>('/whoami');
+    const targetContextId = contextId ? Number(contextId) : null;
+    const member = targetContextId
+      ? res.data.members?.find((m) => m.owner.id === targetContextId)
+      : res.data.members?.find((m) => m.owner.resourceType === 'Team') || res.data.members?.[0];
+
+    const perms = member?.permissions as Record<string, any> | undefined;
+    const attPerms = perms?.ActivityAttendance;
+    const incPerms = perms?.Incident;
+    const exPerms = perms?.Exercise;
+    const evPerms = perms?.Event;
+
+    return {
+      canUpdateOwnAttendance: Boolean(attPerms?.UPDATEOWN),
+      canCreateAttendance: Boolean(attPerms?.CREATE),
+      canUpdateAllAttendance: Boolean(attPerms?.UPDATE),
+      canUpdateExercise: Boolean(exPerms?.UPDATE),
+      canUpdateIncident: Boolean(incPerms?.UPDATE),
+      canUpdateEvent: Boolean(evPerms?.UPDATE),
+      memberId: member?.id || null,
+    };
+  } catch (e) {
+    return {
+      canUpdateOwnAttendance: false,
+      canCreateAttendance: false,
+      canUpdateAllAttendance: false,
+      canUpdateExercise: false,
+      canUpdateIncident: false,
+      canUpdateEvent: false,
+      memberId: null,
+    };
+  }
+};
+
+

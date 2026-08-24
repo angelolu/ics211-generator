@@ -16,6 +16,17 @@ export interface MemberDetailMaps {
   emailMap: Record<number, string>;
 }
 
+export function formatMemberStatus(status?: string): string {
+  if (!status) return '';
+  if (status.includes('_') || status === status.toUpperCase()) {
+    return status
+      .split('_')
+      .map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+      .join('-');
+  }
+  return status;
+}
+
 /**
  * Build lookup maps from member detail + attendee data.
  * Optionally pass attData to override roles from attendance records.
@@ -34,7 +45,7 @@ export function buildMemberMaps(memberData: any[], attData?: any[]): MemberDetai
       else if (m.idTag) idsMap[m.id] = m.idTag;
       else idsMap[m.id] = String(m.id);
       if (m.customStatus?.title) statusMap[m.id] = m.customStatus.title;
-      else if (m.status) statusMap[m.id] = m.status;
+      else if (m.status) statusMap[m.id] = formatMemberStatus(m.status);
       if (m.role?.title) rolesMap[m.id] = m.role.title;
       if (m.email) emailMap[m.id] = extractEmail(m.email);
     }
