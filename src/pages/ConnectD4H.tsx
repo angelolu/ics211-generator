@@ -1,6 +1,9 @@
 import { AlertCircle, CheckCircle2, ExternalLink, Loader2, LogIn, LogOut, ShieldCheck } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Button, buttonVariants } from '@/components/ui/button';
+import { cn } from '@/lib/utils';
 import d4hLogo from '../assets/d4h_tech_orange.png';
 import { getD4HErrorMessage, verifyTokenAndGetContext } from '../api/d4h';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
@@ -106,10 +109,10 @@ export function ConnectD4H() {
 
         {/* Error Alert */}
         {error && (
-          <div className="wizard-error-banner">
-            <AlertCircle size={18} className="wizard-error-icon" />
-            <div className="wizard-error-text">{error}</div>
-          </div>
+          <Alert variant="destructive" className="mb-4">
+            <AlertCircle className="size-4" />
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
         )}
 
         {/* Wizard Steps Form */}
@@ -127,7 +130,10 @@ export function ConnectD4H() {
                     href="https://myaccount.us.d4h.com/tokens"
                     target="_blank"
                     rel="noreferrer"
-                    className="btn btn-secondary btn-sm open-tokens-btn"
+                    className={cn(
+                      buttonVariants({ variant: 'outline', size: 'sm' }),
+                      'h-8 gap-1.5 font-semibold text-xs text-slate-700 dark:text-slate-200'
+                    )}
                   >
                     <ExternalLink size={13} />
                     Open Tokens Page
@@ -175,22 +181,24 @@ export function ConnectD4H() {
 
           {/* Bottom Action Buttons */}
           <div className="wizard-actions-bar">
-            <button
+            <Button
               type="button"
+              variant="outline"
               onClick={handleReturnToDashboard}
-              className="btn btn-secondary outline-dashboard-btn"
+              className="h-10 px-4 font-semibold"
             >
               Return to Dashboard
-            </button>
+            </Button>
 
-            <button
+            <Button
               type="submit"
+              variant="default"
               disabled={!token.trim() || isLoading}
-              className="btn btn-primary connect-submit-btn"
+              className="h-10 px-5 font-bold gap-2"
             >
               {isLoading ? (
                 <>
-                  <Loader2 size={16} className="btn-spinner" />
+                  <Loader2 size={16} className="animate-spin" />
                   Connecting…
                 </>
               ) : (
@@ -199,7 +207,7 @@ export function ConnectD4H() {
                   {currentTeam ? 'Update Connection' : 'Connect'}
                 </>
               )}
-            </button>
+            </Button>
           </div>
         </form>
       </div>

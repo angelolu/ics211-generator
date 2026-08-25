@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
+import { Badge } from '@/components/ui/badge';
 import {
   Check,
   ChevronDown,
@@ -157,64 +158,43 @@ export const ActivityStatusBadges: React.FC<ActivityStatusBadgesProps> = ({
     }
   };
 
+  const typeColorClass =
+    activityType === 'incident'
+      ? 'bg-red-50 text-red-800 border-red-200 dark:bg-red-950/50 dark:text-red-300 dark:border-red-800'
+      : activityType === 'event'
+      ? 'bg-teal-50 text-teal-800 border-teal-200 dark:bg-teal-950/50 dark:text-teal-300 dark:border-teal-800'
+      : activityType === 'local'
+      ? 'bg-slate-100 text-slate-700 border-slate-300 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700'
+      : 'bg-sky-50 text-sky-800 border-sky-200 dark:bg-sky-950/50 dark:text-sky-300 dark:border-sky-800';
+
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-      <span
-        className={`badge badge-${activityType}`}
-        style={{
-          height: 28,
-          padding: '0 9px',
-          borderRadius: 6,
-          fontSize: '0.75rem',
-          fontWeight: 700,
-          textTransform: 'uppercase',
-          letterSpacing: '0.05em',
-          display: 'inline-flex',
-          alignItems: 'center',
-          boxSizing: 'border-box',
-        }}
+      <Badge
+        variant="outline"
+        className={`h-7 px-2.5 text-xs font-bold uppercase tracking-wider shadow-xs border ${typeColorClass}`}
       >
         {TYPE_LABELS[activityType] || 'Activity'}
-      </span>
+      </Badge>
 
       {activity?.reference && (
-        <span
-          style={{
-            height: 28,
-            padding: '0 9px',
-            borderRadius: 6,
-            fontSize: '0.75rem',
-            fontWeight: 700,
-            color: 'var(--slate-11)',
-            background: 'var(--slate-2)',
-            border: '1px solid var(--slate-4)',
-            letterSpacing: '0.05em',
-            display: 'inline-flex',
-            alignItems: 'center',
-            boxSizing: 'border-box',
-          }}
+        <Badge
+          variant="outline"
+          className="h-7 px-2.5 text-xs font-bold font-mono tracking-wider text-slate-700 bg-slate-100/70 border-slate-300 dark:text-slate-300 dark:bg-slate-800"
         >
           #{activity.reference}
-        </span>
+        </Badge>
       )}
 
-      <span
-        style={{
-          height: 28,
-          padding: '0 9px',
-          borderRadius: 6,
-          fontSize: '0.75rem',
-          fontWeight: 700,
-          background: isPast ? 'var(--slate-2)' : '#ecfdf5',
-          color: isPast ? 'var(--slate-10)' : '#047857',
-          border: isPast ? '1px solid var(--slate-4)' : '1px solid #a7f3d0',
-          display: 'inline-flex',
-          alignItems: 'center',
-          boxSizing: 'border-box',
-        }}
+      <Badge
+        variant={isPast ? 'secondary' : 'outline'}
+        className={`h-7 px-2.5 text-xs font-bold ${
+          isPast
+            ? 'text-slate-600 bg-slate-100 border-slate-200'
+            : 'border-emerald-300 bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800'
+        }`}
       >
         {isPast ? 'Completed' : 'Upcoming / Active'}
-      </span>
+      </Badge>
 
       {canRespondToEvent ? (
         <DropdownMenu.Root>
@@ -364,25 +344,13 @@ export const ActivityStatusBadges: React.FC<ActivityStatusBadgesProps> = ({
           </DropdownMenu.Portal>
         </DropdownMenu.Root>
       ) : isMarkedAttending ? (
-        <span
-          style={{
-            height: 28,
-            padding: '0 9px',
-            borderRadius: 6,
-            fontSize: '0.75rem',
-            fontWeight: 700,
-            color: '#047857',
-            background: '#ecfdf5',
-            border: '1px solid #a7f3d0',
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 5,
-            boxSizing: 'border-box',
-          }}
+        <Badge
+          variant="outline"
+          className="h-7 px-2.5 text-xs font-bold border-emerald-300 bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300 gap-1.5"
         >
           <UserCheck size={12} strokeWidth={2.5} />
           {isPast ? 'Attended' : 'Attending'}
-        </span>
+        </Badge>
       ) : null}
     </div>
   );

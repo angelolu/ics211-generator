@@ -1,5 +1,8 @@
 import React from 'react';
 import * as HoverCard from '@radix-ui/react-hover-card';
+import { Badge } from '@/components/ui/badge';
+import { buttonVariants } from '@/components/ui/button';
+import { cn } from '@/lib/utils';
 import {
   ExternalLink,
   HeartPulse,
@@ -85,14 +88,6 @@ export const MemberPopover: React.FC<MemberPopoverProps> = ({
       effectiveMember?.status === 'PROBATIONARY' ||
       effectiveMember?.status === 'RESERVE');
 
-  const badgeClass = isNonOperational
-    ? 'badge badge-nonoperational'
-    : isOperational
-      ? 'badge badge-operational'
-      : isWarningStatus
-        ? 'badge badge-warning'
-        : 'badge badge-info';
-
   const displayStatus = isNonOperational
     ? 'Non-Operational'
     : isOperational
@@ -150,31 +145,39 @@ export const MemberPopover: React.FC<MemberPopoverProps> = ({
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6 }}>
             <div>
               {displayStatus ? (
-                <span className={badgeClass}>
-                  {displayStatus}
-                </span>
+                isNonOperational ? (
+                  <Badge variant="destructive" className="h-5.5 px-2 text-[0.6875rem] font-bold">
+                    {displayStatus}
+                  </Badge>
+                ) : isOperational ? (
+                  <Badge
+                    variant="outline"
+                    className="h-5.5 px-2 text-[0.6875rem] font-bold border-emerald-300 bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800"
+                  >
+                    {displayStatus}
+                  </Badge>
+                ) : isWarningStatus ? (
+                  <Badge
+                    variant="secondary"
+                    className="h-5.5 px-2 text-[0.6875rem] font-bold border-amber-300 bg-amber-50 text-amber-800 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-800"
+                  >
+                    {displayStatus}
+                  </Badge>
+                ) : (
+                  <Badge variant="secondary" className="h-5.5 px-2 text-[0.6875rem] font-bold">
+                    {displayStatus}
+                  </Badge>
+                )
               ) : null}
             </div>
 
             {refTag && (
-              <span
-                style={{
-                  height: 22,
-                  padding: '0 8px',
-                  borderRadius: 6,
-                  fontSize: '0.6875rem',
-                  fontWeight: 700,
-                  color: 'var(--slate-11)',
-                  background: 'var(--slate-3)',
-                  border: '1px solid var(--slate-4)',
-                  letterSpacing: '0.05em',
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  boxSizing: 'border-box',
-                }}
+              <Badge
+                variant="outline"
+                className="h-5.5 px-2 text-[0.6875rem] font-bold font-mono tracking-wider text-slate-700 bg-slate-100/70 border-slate-300 dark:text-slate-300 dark:bg-slate-800"
               >
                 {refTag}
-              </span>
+              </Badge>
             )}
           </div>
 
@@ -297,7 +300,8 @@ export const MemberPopover: React.FC<MemberPopoverProps> = ({
             style={{
               display: 'flex',
               alignItems: 'center',
-              gap: 8,
+              justifyContent: 'flex-end',
+              gap: 6,
               marginTop: 2,
               paddingTop: 8,
               borderTop: '1px solid var(--slate-3)',
@@ -306,48 +310,30 @@ export const MemberPopover: React.FC<MemberPopoverProps> = ({
             {phone && (
               <a
                 href={`tel:${phone}`}
-                className="btn btn-secondary btn-sm"
-                style={{
-                  flex: 1,
-                  height: 30,
-                  padding: '0 8px',
-                  justifyContent: 'center',
-                  fontSize: '0.75rem',
-                  fontWeight: 600,
-                  gap: 5,
-                  textDecoration: 'none',
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  boxSizing: 'border-box',
-                }}
                 onClick={(e) => e.stopPropagation()}
+                title={`Call ${phone}`}
+                aria-label={`Call ${phone}`}
+                className={cn(
+                  buttonVariants({ variant: 'outline', size: 'sm' }),
+                  'size-8 p-0 flex items-center justify-center text-slate-700 dark:text-slate-200'
+                )}
               >
-                <Phone size={12} />
-                <span>Call</span>
+                <Phone size={14} />
               </a>
             )}
 
             {email && (
               <a
                 href={`mailto:${email}`}
-                className="btn btn-secondary btn-sm"
-                style={{
-                  flex: 1,
-                  height: 30,
-                  padding: '0 8px',
-                  justifyContent: 'center',
-                  fontSize: '0.75rem',
-                  fontWeight: 600,
-                  gap: 5,
-                  textDecoration: 'none',
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  boxSizing: 'border-box',
-                }}
                 onClick={(e) => e.stopPropagation()}
+                title={`Email ${email}`}
+                aria-label={`Email ${email}`}
+                className={cn(
+                  buttonVariants({ variant: 'outline', size: 'sm' }),
+                  'size-8 p-0 flex items-center justify-center text-slate-700 dark:text-slate-200'
+                )}
               >
-                <Mail size={12} />
-                <span>Email</span>
+                <Mail size={14} />
               </a>
             )}
 
@@ -356,26 +342,15 @@ export const MemberPopover: React.FC<MemberPopoverProps> = ({
                 href={d4hUrl}
                 target="_blank"
                 rel="noreferrer"
-                className="btn btn-secondary btn-sm"
-                title="View member in D4H"
+                title="View in D4H"
+                aria-label="View member in D4H"
                 onClick={(e) => e.stopPropagation()}
-                style={{
-                  flex: 1,
-                  height: 30,
-                  padding: '0 8px',
-                  justifyContent: 'center',
-                  fontSize: '0.75rem',
-                  fontWeight: 600,
-                  gap: 5,
-                  textDecoration: 'none',
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  whiteSpace: 'nowrap',
-                  boxSizing: 'border-box',
-                }}
+                className={cn(
+                  buttonVariants({ variant: 'outline', size: 'sm' }),
+                  'size-8 p-0 flex items-center justify-center text-slate-700 dark:text-slate-200'
+                )}
               >
-                <span>D4H</span>
-                <ExternalLink size={12} />
+                <ExternalLink size={14} />
               </a>
             )}
           </div>

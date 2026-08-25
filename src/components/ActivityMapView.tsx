@@ -1,25 +1,27 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
-import * as Tooltip from '@radix-ui/react-tooltip';
+import { toast } from 'sonner';
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import mapboxgl from 'mapbox-gl';
 import 'mapbox-gl/dist/mapbox-gl.css';
 import {
   Car,
   Check,
-  ChevronDown,
-  Clock,
-  Compass,
   Edit2,
   Loader2,
   MapPin,
-  Maximize2,
   Navigation,
-  Play,
-  Plus,
-  RotateCcw,
   Search,
   Trash2,
-  Users,
   X,
 } from 'lucide-react';
 import { format, isSameDay } from 'date-fns';
@@ -80,13 +82,20 @@ function getPersistedLayout(type: WindowType): Layout {
   return DEFAULT_PANEL_LAYOUTS[type];
 }
 
-interface ActivityMapViewProps {
+export interface ActivityMapViewRef {
+  openAddCarpool: () => void;
+  playAnimation: () => void;
+  fitAll: () => void;
+}
+
+export interface ActivityMapViewProps {
   activity: Activity | null;
   activityType: string;
   activityName: string;
   attendees: Attendee[];
   members: Member[];
   isLoading?: boolean;
+  departureMode?: DepartureWindowMode;
 }
 
 interface PlottedMember {
@@ -161,14 +170,15 @@ function getMemberInitials(name: string): string {
   return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
 }
 
-export const ActivityMapView: React.FC<ActivityMapViewProps> = ({
+export const ActivityMapView = React.forwardRef<ActivityMapViewRef, ActivityMapViewProps>(({
   activity,
   activityType: _activityType,
   activityName,
   attendees,
   members,
   isLoading,
-}) => {
+  departureMode: propDepartureMode,
+}, ref) => {
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
   const [mapContainerEl, setMapContainerEl] = useState<HTMLDivElement | null>(null);
   const mapInstanceRef = useRef<mapboxgl.Map | null>(null);
@@ -223,7 +233,7 @@ export const ActivityMapView: React.FC<ActivityMapViewProps> = ({
 
   // Mode & Detour Settings
   const [viewMode, setViewMode] = useState<'overview' | 'suggestions'>('overview');
-  const [departureMode, setDepartureMode] = useState<DepartureWindowMode>('baseline');
+  const departureMode = propDepartureMode ?? 'baseline';
   const [maxDetourMinutes, setMaxDetourMinutes] = useState<number>(30);
   const [vehicleCapacity, setVehicleCapacity] = useState<number>(4);
 
@@ -332,29 +342,6 @@ export const ActivityMapView: React.FC<ActivityMapViewProps> = ({
   const [newPassengerIds, setNewPassengerIds] = useState<number[]>([]);
   const [isSavingCarpool, setIsSavingCarpool] = useState<boolean>(false);
 
-  // Notice / Undo State for deleted carpools
-  const [deletedCarpoolNotice, setDeletedCarpoolNotice] = useState<{
-    carpool: CarpoolGroup;
-    index: number;
-    label: string;
-  } | null>(null);
-  const deleteNoticeTimerRef = useRef<number | null>(null);
-
-  // Notice State for accepted/created carpools
-  const [acceptedCarpoolNotice, setAcceptedCarpoolNotice] = useState<{
-    carpool: CarpoolGroup;
-    title: string;
-    message?: string;
-  } | null>(null);
-  const acceptNoticeTimerRef = useRef<number | null>(null);
-
-  useEffect(() => {
-    return () => {
-      if (deleteNoticeTimerRef.current) clearTimeout(deleteNoticeTimerRef.current);
-      if (acceptNoticeTimerRef.current) clearTimeout(acceptNoticeTimerRef.current);
-    };
-  }, []);
-
   const handleDeleteCarpool = (cp: CarpoolGroup, index: number) => {
     const driver = plottedMembers.find((m) => m.memberId === cp.driverId);
     const label = driver ? `${driver.name}'s carpool` : cp.name || 'Carpool';
@@ -362,31 +349,19 @@ export const ActivityMapView: React.FC<ActivityMapViewProps> = ({
     setActiveCarpools((prev) => prev.filter((item) => item.id !== cp.id));
     setSelectedCarpoolIds((prev) => prev.filter((id) => id !== cp.id));
 
-    if (deleteNoticeTimerRef.current) clearTimeout(deleteNoticeTimerRef.current);
-
-    setDeletedCarpoolNotice({
-      carpool: cp,
-      index,
-      label,
+    toast(`${label} deleted`, {
+      action: {
+        label: 'Undo',
+        onClick: () => {
+          setActiveCarpools((prev) => {
+            const copy = [...prev];
+            copy.splice(Math.min(index, copy.length), 0, cp);
+            return copy;
+          });
+          setSelectedCarpoolIds((prev) => [...prev, cp.id]);
+        },
+      },
     });
-
-    deleteNoticeTimerRef.current = window.setTimeout(() => {
-      setDeletedCarpoolNotice(null);
-    }, 6000);
-  };
-
-  const handleUndoDeleteCarpool = () => {
-    if (!deletedCarpoolNotice) return;
-    if (deleteNoticeTimerRef.current) clearTimeout(deleteNoticeTimerRef.current);
-
-    const { carpool, index } = deletedCarpoolNotice;
-    setActiveCarpools((prev) => {
-      const copy = [...prev];
-      copy.splice(Math.min(index, copy.length), 0, carpool);
-      return copy;
-    });
-    setSelectedCarpoolIds((prev) => [...prev, carpool.id]);
-    setDeletedCarpoolNotice(null);
   };
 
   const streetAddress = getActivityStreetAddress(activity || undefined);
@@ -1830,19 +1805,9 @@ export const ActivityMapView: React.FC<ActivityMapViewProps> = ({
     const driver = plottedMembers.find((m) => m.memberId === carpool.driverId);
     const label = driver ? `${driver.name}'s carpool` : carpool.name || 'Carpool';
 
-    if (acceptNoticeTimerRef.current) clearTimeout(acceptNoticeTimerRef.current);
-    if (deleteNoticeTimerRef.current) clearTimeout(deleteNoticeTimerRef.current);
-    setDeletedCarpoolNotice(null);
-
-    setAcceptedCarpoolNotice({
-      carpool: acceptedGroup,
-      title: `${label} accepted`,
-      message: 'View this carpool in the Overview tab',
+    toast.success(`${label} accepted`, {
+      description: 'View this carpool in the Overview tab',
     });
-
-    acceptNoticeTimerRef.current = window.setTimeout(() => {
-      setAcceptedCarpoolNotice(null);
-    }, 6000);
   };
 
   // Open modal to modify a suggested or active carpool
@@ -1908,22 +1873,12 @@ export const ActivityMapView: React.FC<ActivityMapViewProps> = ({
 
     handleCarpoolClick(savedGroup);
 
-    // Show notification alert if user creates/updates carpool while not on Overview tab
+    // Show notification toast if user creates/updates carpool while not on Overview tab
     if (viewMode !== 'overview') {
       const label = `${driver.name}'s carpool`;
-      if (acceptNoticeTimerRef.current) clearTimeout(acceptNoticeTimerRef.current);
-      if (deleteNoticeTimerRef.current) clearTimeout(deleteNoticeTimerRef.current);
-      setDeletedCarpoolNotice(null);
-
-      setAcceptedCarpoolNotice({
-        carpool: savedGroup,
-        title: editingCarpoolId ? `${label} updated` : `${label} created`,
-        message: 'View this carpool in the Overview tab',
+      toast.success(editingCarpoolId ? `${label} updated` : `${label} created`, {
+        description: 'View this carpool in the Overview tab',
       });
-
-      acceptNoticeTimerRef.current = window.setTimeout(() => {
-        setAcceptedCarpoolNotice(null);
-      }, 6000);
     }
   };
 
@@ -1949,6 +1904,18 @@ export const ActivityMapView: React.FC<ActivityMapViewProps> = ({
     };
   }, [plottedMembers, unmappedMembers, activeCarpools, editingCarpoolId]);
 
+  // Expose imperative handle methods for parent view (ActivityDetails top bar)
+  React.useImperativeHandle(ref, () => ({
+    openAddCarpool: () => {
+      setEditingCarpoolId(null);
+      setNewDriverId(null);
+      setNewPassengerIds([]);
+      setIsCreatingCarpool(true);
+    },
+    playAnimation: () => playIntroAnimation(0, false),
+    fitAll: () => fitAllBounds(),
+  }), [playIntroAnimation, fitAllBounds]);
+
   return (
     <div
       className="activity-map-view animate-fade-in"
@@ -1962,290 +1929,6 @@ export const ActivityMapView: React.FC<ActivityMapViewProps> = ({
         gap: 16,
       }}
     >
-      {/* ── Main Map Header Toolbar ────────────────────────────── */}
-      <div
-        className="card activity-map-toolbar"
-        style={{
-          padding: '12px 18px',
-          display: 'flex',
-          flexWrap: 'wrap',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          gap: 12,
-          flexShrink: 0,
-        }}
-      >
-        {/* Left: Mode Switcher & Geocode Status */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-          {!isNarrow && <Compass size={18} className="map-topbar-compass" style={{ color: 'var(--navy-7)' }} />}
-
-          {/* Mode Switcher Toggle */}
-          <div
-            style={{
-              display: 'inline-flex',
-              background: 'var(--slate-3)',
-              padding: 3,
-              borderRadius: 8,
-              gap: 2,
-            }}
-          >
-            <button
-              onClick={() => {
-                setViewMode('overview');
-                clearActiveRoute();
-              }}
-              style={{
-                border: 'none',
-                background: viewMode === 'overview' ? 'white' : 'transparent',
-                color: viewMode === 'overview' ? 'var(--navy-9)' : 'var(--slate-10)',
-                fontWeight: 600,
-                fontSize: '0.8125rem',
-                padding: '5px 12px',
-                borderRadius: 6,
-                cursor: 'pointer',
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 6,
-                boxShadow: viewMode === 'overview' ? '0 1px 4px rgba(0,0,0,0.12)' : 'none',
-                transition: 'all 0.15s ease',
-              }}
-            >
-              <Users size={14} />
-              <span>Overview</span>
-              {attendees.length > 0 && (
-                <span
-                  style={{
-                    background: 'var(--slate-4)',
-                    color: 'var(--slate-11)',
-                    fontSize: '0.6875rem',
-                    padding: '1px 5px',
-                    borderRadius: 4,
-                    fontWeight: 700,
-                  }}
-                >
-                  {attendees.length}
-                </span>
-              )}
-            </button>
-
-            <button
-              onClick={() => {
-                setViewMode('suggestions');
-                clearActiveRoute();
-              }}
-              style={{
-                border: 'none',
-                background: viewMode === 'suggestions' ? 'white' : 'transparent',
-                color: viewMode === 'suggestions' ? 'var(--navy-9)' : 'var(--slate-10)',
-                fontWeight: 600,
-                fontSize: '0.8125rem',
-                padding: '5px 12px',
-                borderRadius: 6,
-                cursor: 'pointer',
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 6,
-                boxShadow: viewMode === 'suggestions' ? '0 1px 4px rgba(0,0,0,0.12)' : 'none',
-                transition: 'all 0.15s ease',
-              }}
-            >
-              <Car size={14} />
-              <span>Carpool Suggestions</span>
-              {suggestedCarpools.length > 0 && (
-                <span
-                  style={{
-                    background: 'var(--teal-2)',
-                    color: 'var(--teal-9)',
-                    fontSize: '0.6875rem',
-                    padding: '1px 5px',
-                    borderRadius: 4,
-                    fontWeight: 700,
-                  }}
-                >
-                  {suggestedCarpools.length}
-                </span>
-              )}
-            </button>
-          </div>
-        </div>
-
-        {/* Right: Promoted Actions (Animate Icon, Departure Window, Add Carpool, Fit All) */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-          {/* Animate Icon Button (Overview Mode Only) */}
-          {viewMode === 'overview' && (
-            <Tooltip.Root>
-              <Tooltip.Trigger asChild>
-                <button
-                  onClick={() => playIntroAnimation(0, false)}
-                  className="btn btn-secondary btn-sm"
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    width: 29,
-                    height: 29,
-                    padding: 0,
-                    cursor: 'pointer',
-                  }}
-                  title="Replay animated corridor driving routes"
-                  aria-label="Replay animated routes"
-                >
-                  <Play size={13} style={{ marginLeft: 1 }} />
-                </button>
-              </Tooltip.Trigger>
-              <Tooltip.Portal>
-                <Tooltip.Content className="tooltip-content" side="top" sideOffset={5}>
-                  Replay animated routes
-                </Tooltip.Content>
-              </Tooltip.Portal>
-            </Tooltip.Root>
-          )}
-
-          {/* Departure Window Selector (Shadcn / Radix UI Theme) */}
-          <DropdownMenu.Root>
-            <DropdownMenu.Trigger asChild>
-              <button
-                className="btn btn-secondary btn-sm"
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 6,
-                  padding: '5px 10px',
-                  fontSize: '0.75rem',
-                  fontWeight: 600,
-                  background: 'white',
-                  border: '1px solid var(--slate-4)',
-                  borderRadius: 6,
-                  color: 'var(--slate-12)',
-                  boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
-                  cursor: 'pointer',
-                }}
-                title="Select departure time window for traffic and routing calculations"
-              >
-                <Clock size={13} style={{ color: 'var(--slate-9)' }} />
-                <span style={{ color: 'var(--slate-10)', fontWeight: 500 }}>Traffic:</span>                <span>
-                  {departureMode === 'baseline'
-                    ? 'Average'
-                    : departureMode === 'now'
-                      ? 'Leave Now'
-                      : departureMode === 'activity_start'
-                        ? 'Arrive by start time'
-                        : departureMode === 'morning_rush'
-                          ? 'Morning Rush (07:30)'
-                          : departureMode === 'midday'
-                            ? 'Midday (12:00)'
-                            : 'Evening Rush (17:00)'}
-                </span>
-                <ChevronDown size={12} style={{ color: 'var(--slate-9)', marginLeft: 2 }} />
-              </button>
-            </DropdownMenu.Trigger>
-
-            <DropdownMenu.Portal>
-              <DropdownMenu.Content
-                className="select-content no-print animate-fade-in"
-                align="end"
-                sideOffset={6}
-                style={{
-                  minWidth: 210,
-                  background: 'white',
-                  border: '1px solid var(--slate-4)',
-                  borderRadius: 8,
-                  padding: 4,
-                  boxShadow: '0 4px 16px rgba(0,0,0,0.12)',
-                  zIndex: 9999,
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: 2,
-                }}
-              >
-                <div
-                  style={{
-                    padding: '6px 8px 4px',
-                    fontSize: '0.6875rem',
-                    fontWeight: 700,
-                    color: 'var(--slate-9)',
-                    textTransform: 'uppercase',
-                    letterSpacing: '0.05em',
-                  }}
-                >
-                  Departure Window
-                </div>
-
-                {[
-                  { value: 'baseline', label: 'Average', desc: 'Standard traffic estimates' },
-                  { value: 'now', label: 'Leave Now', desc: 'Real-time live traffic' },
-                  { value: 'activity_start', label: 'Arrive by start time', desc: 'Target 30m prior to start' },
-                  { value: 'morning_rush', label: 'Morning Rush (07:30)', desc: 'Peak morning commute' },
-                  { value: 'midday', label: 'Midday (12:00)', desc: 'Midday traffic flow' },
-                  { value: 'evening_rush', label: 'Evening Rush (17:00)', desc: 'Peak evening commute' },
-                ].map((opt) => {
-                  const isSelected = departureMode === opt.value;
-                  return (
-                    <DropdownMenu.Item
-                      key={opt.value}
-                      className="select-item"
-                      onSelect={() => setDepartureMode(opt.value as DepartureWindowMode)}
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
-                        padding: '6px 8px',
-                        borderRadius: 6,
-                        fontSize: '0.8125rem',
-                        fontWeight: isSelected ? 600 : 500,
-                        color: isSelected ? 'var(--navy-9)' : 'var(--slate-12)',
-                        background: isSelected ? 'var(--navy-1)' : 'transparent',
-                        cursor: 'pointer',
-                        outline: 'none',
-                        transition: 'background 0.12s ease',
-                      }}
-                    >
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-                        <span>{opt.label}</span>
-                        <span style={{ fontSize: '0.6875rem', color: 'var(--slate-9)', fontWeight: 400 }}>
-                          {opt.desc}
-                        </span>
-                      </div>
-                      {isSelected && (
-                        <Check size={14} style={{ color: 'var(--navy-9)', marginLeft: 8, flexShrink: 0 }} />
-                      )}
-                    </DropdownMenu.Item>
-                  );
-                })}
-              </DropdownMenu.Content>
-            </DropdownMenu.Portal>
-          </DropdownMenu.Root>
-
-          {/* Add Carpool Button */}
-          <button
-            onClick={() => {
-              setEditingCarpoolId(null);
-              setNewDriverId(null);
-              setNewPassengerIds([]);
-              setIsCreatingCarpool(true);
-            }}
-            className="btn btn-primary btn-sm"
-            style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontWeight: 600 }}
-            title="Create a new carpool group"
-          >
-            <Plus size={14} />
-            <span>Add Carpool</span>
-          </button>
-
-          {/* Fit All Button (Hidden on smaller screens) */}
-          {!isNarrow && (
-            <button
-              onClick={fitAllBounds}
-              className="btn btn-secondary btn-sm map-fit-all-btn"
-              style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontWeight: 600 }}
-              title="Fit map to all responders and incident"
-            >
-              <Maximize2 size={13} />
-              <span>Fit All</span>
-            </button>
-          )}
-        </div>
-      </div>
 
       {/* ── Missing Token Notice ──────────────────────────── */}
       {!mapboxToken && (
@@ -2390,8 +2073,8 @@ export const ActivityMapView: React.FC<ActivityMapViewProps> = ({
               boxSizing: 'border-box',
             }}
           >
-            {/* Destination Header (Overview only, hidden on narrow screens) */}
-            {viewMode === 'overview' && !isNarrow && (
+            {/* Destination Header (hidden on narrow screens) */}
+            {!isNarrow && (
               <div className="map-sidebar-destination-header" style={{ paddingBottom: 10, borderBottom: '1px solid var(--slate-3)' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                   <MapPin size={15} style={{ color: 'var(--slate-9)' }} />
@@ -2423,118 +2106,106 @@ export const ActivityMapView: React.FC<ActivityMapViewProps> = ({
               </div>
             )}
 
+            {/* Mode Switcher Tabs (Subordinate to main page switcher; no icons) */}
+            <Tabs
+              value={viewMode}
+              onValueChange={(v) => {
+                if (v) {
+                  setViewMode(v as 'overview' | 'suggestions');
+                  clearActiveRoute();
+                }
+              }}
+              className="w-full"
+            >
+              <TabsList className="w-full grid grid-cols-2 h-8">
+                <TabsTrigger value="overview" className="text-xs font-semibold py-1">
+                  <span>Overview</span>
+                  {attendees.length > 0 && (
+                    <Badge
+                      variant="secondary"
+                      className="h-4 px-1.5 text-[0.625rem] font-bold ml-1.5"
+                    >
+                      {attendees.length}
+                    </Badge>
+                  )}
+                </TabsTrigger>
+                <TabsTrigger value="suggestions" className="text-xs font-semibold py-1">
+                  <span>Carpool Suggestions</span>
+                  {suggestedCarpools.length > 0 && (
+                    <Badge
+                      variant="secondary"
+                      className="h-4 px-1.5 text-[0.625rem] font-bold bg-teal-100 text-teal-800 border-teal-200 dark:bg-teal-950/50 dark:text-teal-300 ml-1.5"
+                    >
+                      {suggestedCarpools.length}
+                    </Badge>
+                  )}
+                </TabsTrigger>
+              </TabsList>
+            </Tabs>
+
             {/* ── MODE 1: OVERVIEW ──────────────────────────────── */}
             {viewMode === 'overview' && (
               <>
-                {/* Search & Filter Toolbar in Overview */}
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {/* Search & Filter Toolbar in Overview (Same Line) */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                   {/* Search Input Box */}
-                  <div
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 8,
-                      background: 'var(--slate-2)',
-                      padding: '6px 10px',
-                      borderRadius: 6,
-                      border: '1px solid var(--slate-4)',
-                    }}
-                  >
-                    <Search size={14} style={{ color: 'var(--slate-9)' }} />
-                    <input
+                  <div className="relative flex-1">
+                    <Search
+                      size={14}
+                      className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none"
+                    />
+                    <Input
                       type="text"
                       value={searchQuery}
                       onChange={(e) => setSearchQuery(e.target.value)}
                       placeholder="Search for a member..."
-                      style={{
-                        border: 'none',
-                        background: 'transparent',
-                        fontSize: '0.8125rem',
-                        width: '100%',
-                        outline: 'none',
-                        color: 'var(--slate-12)',
-                      }}
+                      className="h-8 pl-8 pr-8 text-xs bg-slate-50 dark:bg-slate-900 border-slate-300 dark:border-slate-700"
                     />
                     {searchQuery && (
                       <button
+                        type="button"
                         onClick={() => setSearchQuery('')}
-                        style={{ border: 'none', background: 'none', cursor: 'pointer', padding: 0, color: 'var(--slate-8)' }}
+                        aria-label="Clear search"
+                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
                       >
                         <X size={13} />
                       </button>
                     )}
                   </div>
 
-                  {/* Filter Pills */}
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap', marginTop: 4 }}>
-                    <button
-                      onClick={() => setOverviewFilter('all')}
-                      style={{
-                        border: 'none',
-                        background: overviewFilter === 'all' ? 'var(--navy-9)' : 'var(--slate-3)',
-                        color: overviewFilter === 'all' ? 'white' : 'var(--slate-11)',
-                        fontSize: '0.6875rem',
-                        fontWeight: 600,
-                        padding: '3px 8px',
-                        borderRadius: 12,
-                        cursor: 'pointer',
-                        transition: 'all 0.15s ease',
-                      }}
-                    >
-                      All ({activeCarpools.length + (plottedMembers.length - activeCarpoolMemberIds.size) + (unmappedMembers.length - Array.from(activeCarpoolMemberIds).filter(id => unmappedMembers.some(u => u.memberId === id)).length)})
-                    </button>
-
-                    <button
-                      onClick={() => setOverviewFilter('carpool')}
-                      style={{
-                        border: 'none',
-                        background: overviewFilter === 'carpool' ? 'var(--navy-9)' : 'var(--slate-3)',
-                        color: overviewFilter === 'carpool' ? 'white' : 'var(--slate-11)',
-                        fontSize: '0.6875rem',
-                        fontWeight: 600,
-                        padding: '3px 8px',
-                        borderRadius: 12,
-                        cursor: 'pointer',
-                        transition: 'all 0.15s ease',
-                      }}
-                    >
-                      Carpools ({activeCarpools.length})
-                    </button>
-
-                    <button
-                      onClick={() => setOverviewFilter('solo')}
-                      style={{
-                        border: 'none',
-                        background: overviewFilter === 'solo' ? 'var(--navy-9)' : 'var(--slate-3)',
-                        color: overviewFilter === 'solo' ? 'white' : 'var(--slate-11)',
-                        fontSize: '0.6875rem',
-                        fontWeight: 600,
-                        padding: '3px 8px',
-                        borderRadius: 12,
-                        cursor: 'pointer',
-                        transition: 'all 0.15s ease',
-                      }}
-                    >
-                      Solo ({plottedMembers.filter(m => !activeCarpoolMemberIds.has(m.memberId)).length})
-                    </button>
-
-                    <button
-                      onClick={() => setOverviewFilter('unmapped')}
-                      style={{
-                        border: 'none',
-                        background: overviewFilter === 'unmapped' ? 'var(--navy-9)' : 'var(--slate-3)',
-                        color: overviewFilter === 'unmapped' ? 'white' : 'var(--slate-11)',
-                        fontSize: '0.6875rem',
-                        fontWeight: 600,
-                        padding: '3px 8px',
-                        borderRadius: 12,
-                        cursor: 'pointer',
-                        transition: 'all 0.15s ease',
-                      }}
-                    >
-                      Unmapped ({unmappedMembers.filter(u => !activeCarpoolMemberIds.has(u.memberId)).length})
-                    </button>
-                  </div>
+                  {/* Filter Select */}
+                  <Select
+                    value={overviewFilter}
+                    onValueChange={(val) => {
+                      if (val) setOverviewFilter(val as 'all' | 'carpool' | 'solo' | 'unmapped');
+                    }}
+                  >
+                    <SelectTrigger className="h-8 text-xs font-semibold w-auto min-w-[110px] shrink-0">
+                      <SelectValue>
+                        {overviewFilter === 'all'
+                          ? 'All'
+                          : overviewFilter === 'carpool'
+                          ? 'Carpools'
+                          : overviewFilter === 'solo'
+                          ? 'Solo'
+                          : 'Unmapped'}
+                      </SelectValue>
+                    </SelectTrigger>
+                    <SelectContent align="end">
+                      <SelectItem value="all">
+                        All ({activeCarpools.length + (plottedMembers.length - activeCarpoolMemberIds.size) + (unmappedMembers.length - Array.from(activeCarpoolMemberIds).filter(id => unmappedMembers.some(u => u.memberId === id)).length)})
+                      </SelectItem>
+                      <SelectItem value="carpool">
+                        Carpools ({activeCarpools.length})
+                      </SelectItem>
+                      <SelectItem value="solo">
+                        Solo ({plottedMembers.filter(m => !activeCarpoolMemberIds.has(m.memberId)).length})
+                      </SelectItem>
+                      <SelectItem value="unmapped">
+                        Unmapped ({unmappedMembers.filter(u => !activeCarpoolMemberIds.has(u.memberId)).length})
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
 
                 {/* Overview Cards List */}
@@ -3176,49 +2847,33 @@ export const ActivityMapView: React.FC<ActivityMapViewProps> = ({
                           }}
                         >
                           {/* Edit Button: Icon only */}
-                          <button
+                          <Button
+                            variant="outline"
+                            size="sm"
                             onClick={(e) => {
                               e.stopPropagation();
                               handleOpenModifyCarpool(cp);
                             }}
-                            className="btn btn-secondary btn-sm"
-                            style={{
-                              fontSize: '0.75rem',
-                              padding: '3px 8px',
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              height: 26,
-                            }}
+                            className="size-6.5 p-0"
                             title="Modify carpool suggestion"
                           >
                             <Edit2 size={12} />
-                          </button>
+                          </Button>
 
                           {/* Accept Button: Icon and Text */}
-                          <button
+                          <Button
+                            variant="default"
+                            size="sm"
                             onClick={(e) => {
                               e.stopPropagation();
                               handleAcceptCarpool(cp);
                             }}
-                            className="btn btn-primary btn-sm"
-                            style={{
-                              fontSize: '0.75rem',
-                              padding: '3px 10px',
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              gap: 5,
-                              background: 'var(--teal-9)',
-                              borderColor: 'var(--teal-9)',
-                              color: '#ffffff',
-                              height: 26,
-                              fontWeight: 600,
-                            }}
+                            className="h-6.5 px-2.5 text-xs font-semibold gap-1.5 bg-teal-600 hover:bg-teal-700 text-white"
                             title="Accept suggestion into overview carpools"
                           >
                             <Check size={12} strokeWidth={2.5} />
                             <span>Accept</span>
-                          </button>
+                          </Button>
                         </div>
                       )}
                     </div>
@@ -3266,15 +2921,17 @@ export const ActivityMapView: React.FC<ActivityMapViewProps> = ({
                   {editingCarpoolId ? 'Modify Carpool' : 'Create Carpool'}
                 </span>
               </div>
-              <button
+              <Button
+                variant="ghost"
+                size="sm"
+                className="size-8 p-0"
                 onClick={() => {
                   setIsCreatingCarpool(false);
                   setEditingCarpoolId(null);
                 }}
-                style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--slate-9)' }}
               >
                 <X size={18} />
-              </button>
+              </Button>
             </div>
 
             {/* Select Driver */}
@@ -3404,20 +3061,22 @@ export const ActivityMapView: React.FC<ActivityMapViewProps> = ({
 
             {/* Modal Actions */}
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 10, borderTop: '1px solid var(--slate-3)', paddingTop: 14 }}>
-              <button
+              <Button
+                variant="outline"
+                size="sm"
                 onClick={() => {
                   setIsCreatingCarpool(false);
                   setEditingCarpoolId(null);
                 }}
-                className="btn btn-secondary btn-sm"
               >
                 Cancel
-              </button>
-              <button
+              </Button>
+              <Button
+                variant="default"
+                size="sm"
                 onClick={handleSaveManualCarpool}
                 disabled={!newDriverId || newPassengerIds.length === 0 || isSavingCarpool}
-                className="btn btn-primary btn-sm"
-                style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
+                className="gap-1.5"
               >
                 {isSavingCarpool ? (
                   <Loader2 size={13} className="animate-spin" />
@@ -3425,148 +3084,15 @@ export const ActivityMapView: React.FC<ActivityMapViewProps> = ({
                   <Check size={13} />
                 )}
                 <span>Save Carpool ({1 + newPassengerIds.length} people)</span>
-              </button>
+              </Button>
             </div>
-          </div>
-        </div>
-      )}
-
-      {/* ── Shadcn UI Styled Alert Toast for Deleted Carpool with Undo ── */}
-      {deletedCarpoolNotice && (
-        <div
-          className="animate-slide-up no-print"
-          style={{
-            position: 'fixed',
-            bottom: 24,
-            right: 24,
-            zIndex: 99999,
-            display: 'flex',
-            alignItems: 'center',
-            gap: 12,
-            padding: '10px 16px',
-            background: 'var(--slate-12)',
-            color: '#ffffff',
-            borderRadius: 8,
-            boxShadow: '0 10px 25px -5px rgba(0,0,0,0.25), 0 8px 10px -6px rgba(0,0,0,0.2)',
-            border: '1px solid var(--slate-10)',
-            fontSize: '0.8125rem',
-            fontWeight: 500,
-            maxWidth: 380,
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, minWidth: 0 }}>
-            <Trash2 size={14} style={{ color: 'var(--slate-7)', flexShrink: 0 }} />
-            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {deletedCarpoolNotice.label} deleted
-            </span>
-          </div>
-
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
-            <button
-              onClick={handleUndoDeleteCarpool}
-              style={{
-                border: 'none',
-                background: 'rgba(255, 255, 255, 0.15)',
-                color: '#ffffff',
-                borderRadius: 4,
-                padding: '3px 8px',
-                fontSize: '0.75rem',
-                fontWeight: 600,
-                cursor: 'pointer',
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 4,
-                transition: 'background 0.15s ease',
-              }}
-              onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(255, 255, 255, 0.25)')}
-              onMouseLeave={(e) => (e.currentTarget.style.background = 'rgba(255, 255, 255, 0.15)')}
-            >
-              <RotateCcw size={11} />
-              <span>Undo</span>
-            </button>
-
-            <button
-              onClick={() => {
-                if (deleteNoticeTimerRef.current) clearTimeout(deleteNoticeTimerRef.current);
-                setDeletedCarpoolNotice(null);
-              }}
-              style={{
-                border: 'none',
-                background: 'none',
-                color: 'var(--slate-7)',
-                cursor: 'pointer',
-                padding: 2,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-              }}
-              title="Dismiss"
-            >
-              <X size={14} />
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* ── Shadcn UI Styled Alert Toast for Accepted Carpool ── */}
-      {acceptedCarpoolNotice && (
-        <div
-          className="animate-slide-up no-print"
-          style={{
-            position: 'fixed',
-            bottom: 24,
-            right: 24,
-            zIndex: 99999,
-            display: 'flex',
-            alignItems: 'center',
-            gap: 12,
-            padding: '10px 16px',
-            background: 'var(--slate-12)',
-            color: '#ffffff',
-            borderRadius: 8,
-            boxShadow: '0 10px 25px -5px rgba(0,0,0,0.25), 0 8px 10px -6px rgba(0,0,0,0.2)',
-            border: '1px solid var(--slate-10)',
-            fontSize: '0.8125rem',
-            fontWeight: 500,
-            maxWidth: 420,
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, minWidth: 0 }}>
-            <Check size={15} style={{ color: '#34d399', flexShrink: 0 }} />
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0 }}>
-              <span style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {acceptedCarpoolNotice.title}
-              </span>
-              <span style={{ fontSize: '0.6875rem', color: 'var(--slate-7)' }}>
-                {acceptedCarpoolNotice.message || 'View this carpool in the Overview tab'}
-              </span>
-            </div>
-          </div>
-
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
-            <button
-              onClick={() => {
-                if (acceptNoticeTimerRef.current) clearTimeout(acceptNoticeTimerRef.current);
-                setAcceptedCarpoolNotice(null);
-              }}
-              style={{
-                border: 'none',
-                background: 'none',
-                color: 'var(--slate-7)',
-                cursor: 'pointer',
-                padding: 2,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-              }}
-              title="Dismiss"
-            >
-              <X size={14} />
-            </button>
           </div>
         </div>
       )}
     </div>
   );
-};
+});
+
+ActivityMapView.displayName = 'ActivityMapView';
+
 

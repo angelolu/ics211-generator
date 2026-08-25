@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import * as HoverCard from '@radix-ui/react-hover-card';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import {
   Paperclip,
   Download,
@@ -282,19 +284,12 @@ export const ActivityAttachmentsCard: React.FC<ActivityAttachmentsCardProps> = (
             Attachments
           </h2>
           {attachments.length > 0 && (
-            <span
-              style={{
-                background: 'var(--slate-3)',
-                border: '1px solid var(--slate-4)',
-                color: 'var(--slate-11)',
-                fontWeight: 700,
-                fontSize: '0.6875rem',
-                padding: '2px 8px',
-                borderRadius: 12,
-              }}
+            <Badge
+              variant="secondary"
+              className="h-5 px-2 text-[0.6875rem] font-bold text-slate-700 bg-slate-100 border-slate-300 dark:bg-slate-800 dark:text-slate-300"
             >
               {attachments.length} {attachments.length === 1 ? 'file' : 'files'}
-            </span>
+            </Badge>
           )}
         </div>
 
@@ -392,20 +387,12 @@ export const ActivityAttachmentsCard: React.FC<ActivityAttachmentsCardProps> = (
               </div>
 
               {/* Download Action Icon */}
-              <button
+              <Button
                 type="button"
-                className="btn btn-secondary btn-sm"
+                variant="outline"
+                size="sm"
+                className="size-7 p-0 shrink-0"
                 onClick={(e) => handleDownload(att, e)}
-                style={{
-                  width: 28,
-                  height: 28,
-                  padding: 0,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  borderRadius: 6,
-                  flexShrink: 0,
-                }}
                 title={`Download ${filename}`}
               >
                 {isDownloading ? (
@@ -413,7 +400,7 @@ export const ActivityAttachmentsCard: React.FC<ActivityAttachmentsCardProps> = (
                 ) : (
                   <Download size={13} style={{ color: 'var(--slate-10)' }} />
                 )}
-              </button>
+              </Button>
             </div>
           );
 

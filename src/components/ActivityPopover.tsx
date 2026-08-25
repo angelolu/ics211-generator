@@ -1,5 +1,8 @@
 import React from 'react';
 import * as HoverCard from '@radix-ui/react-hover-card';
+import { Badge } from '@/components/ui/badge';
+import { Button, buttonVariants } from '@/components/ui/button';
+import { cn } from '@/lib/utils';
 import { format, isSameDay } from 'date-fns';
 import {
   Calendar,
@@ -116,64 +119,34 @@ export const ActivityPopover: React.FC<ActivityPopoverProps> = ({
           {/* Header */}
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-              <span
-                className={`badge badge-${activity.type}`}
-                style={{
-                  height: 22,
-                  padding: '0 8px',
-                  borderRadius: 6,
-                  fontSize: '0.6875rem',
-                  fontWeight: 700,
-                  textTransform: 'uppercase',
-                  letterSpacing: '0.05em',
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  boxSizing: 'border-box',
-                }}
+              <Badge
+                variant="outline"
+                className={`h-5.5 px-2 text-[0.6875rem] font-bold uppercase tracking-wider border ${
+                  activity.type === 'incident'
+                    ? 'bg-red-50 text-red-800 border-red-200 dark:bg-red-950/50 dark:text-red-300 dark:border-red-800'
+                    : activity.type === 'event'
+                    ? 'bg-teal-50 text-teal-800 border-teal-200 dark:bg-teal-950/50 dark:text-teal-300 dark:border-teal-800'
+                    : 'bg-sky-50 text-sky-800 border-sky-200 dark:bg-sky-950/50 dark:text-sky-300 dark:border-sky-800'
+                }`}
               >
-                {TYPE_LABELS[activity.type]}
-              </span>
+                {TYPE_LABELS[activity.type] || 'Activity'}
+              </Badge>
               {activity.reference && (
-                <span
-                  style={{
-                    height: 22,
-                    padding: '0 8px',
-                    borderRadius: 6,
-                    fontSize: '0.6875rem',
-                    fontWeight: 700,
-                    color: 'var(--slate-11)',
-                    background: 'var(--slate-3)',
-                    border: '1px solid var(--slate-4)',
-                    letterSpacing: '0.05em',
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    boxSizing: 'border-box',
-                  }}
+                <Badge
+                  variant="outline"
+                  className="h-5.5 px-2 text-[0.6875rem] font-bold font-mono tracking-wider text-slate-700 bg-slate-100/70 border-slate-300 dark:text-slate-300 dark:bg-slate-800"
                 >
-                  {activity.reference}
-                </span>
+                  #{activity.reference}
+                </Badge>
               )}
               {isAttending && (
-                <span
-                  style={{
-                    height: 22,
-                    padding: '0 8px',
-                    borderRadius: 6,
-                    fontSize: '0.6875rem',
-                    fontWeight: 700,
-                    color: 'var(--navy-9)',
-                    background: 'var(--navy-1)',
-                    border: '1px solid var(--navy-3)',
-                    letterSpacing: '0.05em',
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 5,
-                    boxSizing: 'border-box',
-                  }}
+                <Badge
+                  variant="outline"
+                  className="h-5.5 px-2 text-[0.6875rem] font-bold border-emerald-300 bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300 gap-1"
                 >
-                  <UserCheck size={12} strokeWidth={2.5} style={{ color: 'var(--navy-8)' }} />
+                  <UserCheck size={11} strokeWidth={2.5} />
                   {isPast ? 'Attended' : 'Attending'}
-                </span>
+                </Badge>
               )}
             </div>
           </div>
@@ -242,52 +215,32 @@ export const ActivityPopover: React.FC<ActivityPopoverProps> = ({
 
           {/* Action Buttons */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 2, paddingTop: 8, borderTop: '1px solid var(--slate-3)' }}>
-            <button
-              className="btn btn-primary btn-sm"
-              style={{
-                flex: 2,
-                height: 32,
-                padding: '0 12px',
-                justifyContent: 'center',
-                fontSize: '0.8125rem',
-                fontWeight: 600,
-                gap: 6,
-                boxSizing: 'border-box',
-                display: 'inline-flex',
-                alignItems: 'center',
-              }}
+            <Button
+              variant="default"
+              size="sm"
+              className="flex-2 h-8 text-xs font-semibold gap-1.5"
               onClick={(e) => {
                 e.stopPropagation();
                 onOpenRoster(activity);
               }}
             >
-              <span>Open Roster</span>
+              <span>Open Event</span>
               <ArrowRight size={14} />
-            </button>
+            </Button>
 
             {d4hUrl && (
               <a
                 href={d4hUrl}
                 target="_blank"
                 rel="noreferrer"
-                className="btn btn-secondary btn-sm"
                 title="Open D4H"
                 onClick={(e) => e.stopPropagation()}
-                style={{
-                  flex: 1,
-                  height: 32,
-                  padding: '0 10px',
-                  justifyContent: 'center',
-                  fontSize: '0.8125rem',
-                  fontWeight: 600,
-                  gap: 6,
-                  boxSizing: 'border-box',
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  whiteSpace: 'nowrap',
-                }}
+                className={cn(
+                  buttonVariants({ variant: 'outline', size: 'sm' }),
+                  'flex-1 h-8 text-xs font-semibold gap-1.5 text-slate-700 dark:text-slate-200'
+                )}
               >
-                <span>View D4H</span>
+                <span>D4H</span>
                 <ExternalLink size={13} />
               </a>
             )}

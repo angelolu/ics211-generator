@@ -1,6 +1,7 @@
 import { lazy, Suspense } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { Loader2 } from 'lucide-react';
+import { Toaster } from '@/components/ui/sonner';
 
 const ConnectD4H = lazy(() => import('./pages/ConnectD4H').then((module) => ({ default: module.ConnectD4H })));
 const Dashboard = lazy(() => import('./pages/Dashboard').then((module) => ({ default: module.Dashboard })));
@@ -30,6 +31,7 @@ function App() {
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </Suspense>
+      <Toaster position="bottom-right" richColors />
     </Router>
   );
 }

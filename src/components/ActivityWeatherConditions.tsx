@@ -1,4 +1,6 @@
 import React, { useEffect, useState } from 'react';
+import { Badge } from '@/components/ui/badge';
+import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert';
 import {
   Clock,
   Thermometer,
@@ -145,9 +147,6 @@ export const ActivityWeatherConditions: React.FC<ActivityWeatherConditionsProps>
     }
 
     const isDanger = status === 'freeze-danger' || status === 'heat-danger' || status === 'high-hazard' || status === 'heavy' || status === 'dense-fog';
-    const bg = isDanger ? '#fee2e2' : '#fef3c7';
-    const text = isDanger ? '#991b1b' : '#92400e';
-    const border = isDanger ? '#fca5a5' : '#fde68a';
 
     let label = 'Caution';
     if (status === 'freeze-danger') label = 'Freeze Hazard';
@@ -157,21 +156,16 @@ export const ActivityWeatherConditions: React.FC<ActivityWeatherConditionsProps>
     if (status === 'heavy') label = 'Heavy Rain';
 
     return (
-      <span
-        style={{
-          fontSize: '0.625rem',
-          fontWeight: 700,
-          textTransform: 'uppercase',
-          padding: '1px 5px',
-          borderRadius: 4,
-          background: bg,
-          color: text,
-          border: `1px solid ${border}`,
-          letterSpacing: '0.04em',
-        }}
+      <Badge
+        variant={isDanger ? 'destructive' : 'secondary'}
+        className={`h-4.5 text-[0.625rem] px-1.5 font-bold uppercase ${
+          isDanger
+            ? ''
+            : 'border-amber-300 bg-amber-50 text-amber-800 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-800'
+        }`}
       >
         {label}
-      </span>
+      </Badge>
     );
   };
 
@@ -179,47 +173,29 @@ export const ActivityWeatherConditions: React.FC<ActivityWeatherConditionsProps>
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
       {/* ── Active NWS Alerts Banner ────────────────────────── */}
       {weather?.alerts && weather.alerts.length > 0 && (
-        <div
-          style={{
-            background: 'linear-gradient(135deg, #fef2f2 0%, #fff1f2 100%)',
-            border: '1px solid #fecdd3',
-            borderRadius: 10,
-            padding: '10px 14px',
-            display: 'flex',
-            alignItems: 'flex-start',
-            gap: 10,
-            animation: 'weatherEntrance 0.35s cubic-bezier(0.16, 1, 0.3, 1) both',
-          }}
+        <Alert
+          variant="destructive"
+          className="border-rose-200 bg-rose-50/90 text-rose-950 dark:bg-rose-950/40 dark:border-rose-900 shadow-xs"
         >
-          <ShieldAlert size={18} style={{ color: '#e11d48', flexShrink: 0, marginTop: 1 }} />
-          <div style={{ flex: 1 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-              <span style={{ fontSize: '0.8125rem', fontWeight: 700, color: '#9f1239' }}>
+          <ShieldAlert className="size-4 text-rose-600 dark:text-rose-400" />
+          <div className="flex flex-col gap-1 w-full">
+            <div className="flex items-center gap-2 flex-wrap">
+              <AlertTitle className="text-xs font-bold text-rose-900 dark:text-rose-200 m-0">
                 NWS Active Alert: {weather.alerts[0].event}
-              </span>
+              </AlertTitle>
               {weather.alerts[0].severity && (
-                <span
-                  style={{
-                    fontSize: '0.625rem',
-                    fontWeight: 700,
-                    textTransform: 'uppercase',
-                    padding: '1px 6px',
-                    borderRadius: 4,
-                    background: '#ffe4e6',
-                    color: '#be123c',
-                  }}
-                >
+                <Badge variant="destructive" className="h-4 text-[0.5625rem] px-1.5 font-bold uppercase">
                   {weather.alerts[0].severity}
-                </span>
+                </Badge>
               )}
             </div>
             {weather.alerts[0].headline && (
-              <div style={{ fontSize: '0.75rem', color: '#881337', marginTop: 2, lineHeight: 1.4 }}>
+              <AlertDescription className="text-xs text-rose-800/90 dark:text-rose-300 leading-snug">
                 {weather.alerts[0].headline}
-              </div>
+              </AlertDescription>
             )}
           </div>
-        </div>
+        </Alert>
       )}
 
       {/* ── Unified Tiles Flex Container (Wraps & Resizes Together) ── */}

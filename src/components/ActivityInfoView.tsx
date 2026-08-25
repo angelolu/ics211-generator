@@ -1,6 +1,8 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { isSameDay, isToday, isTomorrow, differenceInMinutes, format } from 'date-fns';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import {
   ArrowLeft,
   ArrowRight,
@@ -733,13 +735,14 @@ export const ActivityInfoView: React.FC<ActivityInfoViewProps> = ({
             </h2>
           </div>
           {lat != null && lng != null && (
-            <button
+            <Button
+              variant="outline"
+              size="sm"
               onClick={onSwitchToMap}
-              className="btn btn-secondary btn-sm"
-              style={{ fontSize: '0.75rem', padding: '3px 8px' }}
+              className="h-7 px-2.5 text-xs font-semibold"
             >
               Expand Map
-            </button>
+            </Button>
           )}
         </div>
 
@@ -985,19 +988,12 @@ export const ActivityInfoView: React.FC<ActivityInfoViewProps> = ({
           <h2 style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--slate-12)', margin: 0 }}>
             Responding Personnel
           </h2>
-          <span
-            style={{
-              background: 'var(--navy-1)',
-              border: '1px solid var(--navy-3)',
-              color: 'var(--navy-9)',
-              fontWeight: 700,
-              fontSize: '0.75rem',
-              padding: '2px 8px',
-              borderRadius: 12,
-            }}
+          <Badge
+            variant="secondary"
+            className="h-5 px-2 text-[0.6875rem] font-bold text-slate-700 bg-slate-100 border-slate-300 dark:bg-slate-800 dark:text-slate-300"
           >
             {uniqueMemberIds.size} {uniqueMemberIds.size === 1 ? 'member' : 'members'}
-          </span>
+          </Badge>
         </div>
       </div>
 

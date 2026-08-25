@@ -1,6 +1,8 @@
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
-import * as ToggleGroup from '@radix-ui/react-toggle-group';
 import * as Tooltip from '@radix-ui/react-tooltip';
+import { Badge } from '@/components/ui/badge';
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Button } from '@/components/ui/button';
 import {
   addMonths,
   differenceInCalendarDays,
@@ -32,7 +34,7 @@ import {
   UserCheck,
   Users,
 } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { formatActivityLocation, getActivities, getCurrentUserAttendingActivityIds, getCurrentUserMemberInfo, getD4HErrorMessage, logCurrentUserInfo } from '../api/d4h';
 import type { Activity } from '../api/d4h';
@@ -52,6 +54,14 @@ const TYPE_LABELS: Record<string, string> = {
   exercise: 'Exercise',
   event: 'Event',
   incident: 'Incident',
+};
+
+export const TYPE_COLOR_STYLES: Record<string, string> = {
+  all: 'bg-slate-100 text-slate-700 border-slate-300 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700',
+  exercise: 'bg-sky-50 text-sky-800 border-sky-200 dark:bg-sky-950/50 dark:text-sky-300 dark:border-sky-800',
+  event: 'bg-teal-50 text-teal-800 border-teal-200 dark:bg-teal-950/50 dark:text-teal-300 dark:border-teal-800',
+  incident: 'bg-red-50 text-red-800 border-red-200 dark:bg-red-950/50 dark:text-red-300 dark:border-red-800',
+  local: 'bg-slate-100 text-slate-700 border-slate-300 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700',
 };
 
 export function Dashboard() {
@@ -194,16 +204,49 @@ export function Dashboard() {
     return () => clearInterval(interval);
   }, [contextId, activitiesView, currentMonth]);
 
-  const filtered = activities.filter(a => filter === 'all' || a.type === filter);
+  const viewActivities = useMemo(() => {
+    if (effectiveActivitiesView === 'calendar') {
+      const gridStart = startOfWeek(startOfMonth(currentMonth));
+      const gridEnd = endOfWeek(endOfMonth(currentMonth));
+      return activities.filter(a => {
+        const rawStart = new Date(a.startsAt);
+        const rawEnd = a.endsAt ? new Date(a.endsAt) : rawStart;
+        const start = isNaN(rawStart.getTime()) ? new Date() : rawStart;
+        let end = isNaN(rawEnd.getTime()) || rawEnd < start ? start : rawEnd;
+        const startDay = startOfDay(start);
+        let endDay = startOfDay(end);
+        if (
+          end.getHours() === 0 &&
+          end.getMinutes() === 0 &&
+          end.getSeconds() === 0 &&
+          !isSameDay(start, end)
+        ) {
+          endDay = subDays(endDay, 1);
+        }
+        if (endDay < startDay) {
+          endDay = startDay;
+        }
+        return startDay <= gridEnd && endDay >= gridStart;
+      });
+    }
+    return activities;
+  }, [activities, effectiveActivitiesView, currentMonth]);
+
+  const filtered = useMemo(() => {
+    return viewActivities.filter(a => filter === 'all' || a.type === filter);
+  }, [viewActivities, filter]);
+
   const totalPages = Math.ceil(filtered.length / ITEMS_PER_PAGE);
   const paginated = filtered.slice((currentPage - 1) * ITEMS_PER_PAGE, currentPage * ITEMS_PER_PAGE);
 
-  const counts = {
-    all: activities.length,
-    exercise: activities.filter(a => a.type === 'exercise').length,
-    event: activities.filter(a => a.type === 'event').length,
-    incident: activities.filter(a => a.type === 'incident').length,
-  };
+  const counts = useMemo(() => {
+    return {
+      all: viewActivities.length,
+      exercise: viewActivities.filter(a => a.type === 'exercise').length,
+      event: viewActivities.filter(a => a.type === 'event').length,
+      incident: viewActivities.filter(a => a.type === 'incident').length,
+    };
+  }, [viewActivities]);
 
   return (
     <Tooltip.Provider delayDuration={400}>
@@ -234,19 +277,14 @@ export function Dashboard() {
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <DropdownMenu.Root>
                 <DropdownMenu.Trigger asChild>
-                  <button
-                    className="btn btn-sm"
-                    style={{
-                      gap: 6, padding: '6px 12px',
-                      background: 'rgba(255,255,255,0.1)',
-                      color: 'rgba(255,255,255,0.85)',
-                      border: '1px solid rgba(255,255,255,0.15)',
-                      borderRadius: 7,
-                    }}
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 gap-1.5 px-3 bg-white/10 hover:bg-white/20 text-white/90 hover:text-white border border-white/15 font-semibold text-xs rounded-md"
                   >
                     {contextId ? 'D4H' : 'D4H disconnected'}
                     <ChevronDown size={14} />
-                  </button>
+                  </Button>
                 </DropdownMenu.Trigger>
                 <DropdownMenu.Portal>
                   <DropdownMenu.Content
@@ -353,19 +391,19 @@ export function Dashboard() {
           <div className="dashboard-controls" style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 16 }}>
             <div className="dashboard-switcher-row">
               {contextId ? (
-                <ToggleGroup.Root
-                  type="single"
+                <Tabs
                   value={viewMode}
                   onValueChange={(v) => { if (v) setViewMode(v as 'activities' | 'local'); }}
-                  className="toggle-group"
                 >
-                  <ToggleGroup.Item value="activities" className="toggle-item">
-                    D4H Activities
-                  </ToggleGroup.Item>
-                  <ToggleGroup.Item value="local" className="toggle-item">
-                    Locally Stored
-                  </ToggleGroup.Item>
-                </ToggleGroup.Root>
+                  <TabsList>
+                    <TabsTrigger value="activities">
+                      D4H Activities
+                    </TabsTrigger>
+                    <TabsTrigger value="local">
+                      Locally Stored
+                    </TabsTrigger>
+                  </TabsList>
+                </Tabs>
               ) : (
                 <h2 style={{ fontSize: '1.5rem', fontWeight: 800, letterSpacing: '-0.02em', color: 'var(--slate-12)' }}>
                   Locally Stored
@@ -375,54 +413,53 @@ export function Dashboard() {
 
             {viewMode === 'activities' ? (
               <div className="dashboard-filter-row" style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 12 }}>
-                <ToggleGroup.Root
-                  type="single"
+                <Tabs
                   value={activitiesView}
                   onValueChange={(v) => { if (v) setActivitiesView(v as 'list' | 'calendar'); }}
-                  className="toggle-group activities-view-toggle"
                 >
-                  <ToggleGroup.Item value="calendar" className="toggle-item" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <Calendar size={14} />
-                    <span>Calendar</span>
-                  </ToggleGroup.Item>
-                  <ToggleGroup.Item value="list" className="toggle-item" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <List size={14} />
-                    <span>List</span>
-                  </ToggleGroup.Item>
-                </ToggleGroup.Root>
+                  <TabsList>
+                    <TabsTrigger value="calendar" className="gap-1.5">
+                      <Calendar size={14} />
+                      <span>Calendar</span>
+                    </TabsTrigger>
+                    <TabsTrigger value="list" className="gap-1.5">
+                      <List size={14} />
+                      <span>List</span>
+                    </TabsTrigger>
+                  </TabsList>
+                </Tabs>
 
-                <ToggleGroup.Root
-                  type="single"
+                <Tabs
                   value={filter}
                   onValueChange={(v) => { if (v) { setFilter(v as FilterType); setCurrentPage(1); } }}
-                  className="toggle-group"
                 >
-                  {(['all', 'exercise', 'event', 'incident'] as FilterType[]).map(type => (
-                    <ToggleGroup.Item
-                      key={type}
-                      value={type}
-                      className="toggle-item"
-                      style={{ display: 'flex', alignItems: 'center', gap: 6 }}
-                    >
-                      {type !== 'all' && <div className={`type-dot type-dot-${type}`} />}
-                      <span>{type === 'all' ? 'All' : `${TYPE_LABELS[type]}s`}</span>
-                      <span style={{
-                        background: 'var(--slate-5)', color: 'var(--slate-11)',
-                        borderRadius: 100, padding: '1px 7px', fontSize: '0.7rem', fontWeight: 700,
-                      }}>
-                        {counts[type]}
-                      </span>
-                    </ToggleGroup.Item>
-                  ))}
-                </ToggleGroup.Root>
+                  <TabsList>
+                    {(['all', 'exercise', 'event', 'incident'] as FilterType[]).map(type => (
+                      <TabsTrigger
+                        key={type}
+                        value={type}
+                        className="gap-1.5"
+                      >
+                        <span>{type === 'all' ? 'All' : `${TYPE_LABELS[type]}s`}</span>
+                        <Badge
+                          variant="outline"
+                          className={`h-4 px-1.5 text-[0.625rem] font-bold ml-0.5 border ${TYPE_COLOR_STYLES[type] || TYPE_COLOR_STYLES.all}`}
+                        >
+                          {counts[type]}
+                        </Badge>
+                      </TabsTrigger>
+                    ))}
+                  </TabsList>
+                </Tabs>
               </div>
             ) : (
-              <button
-                className="btn btn-primary"
+              <Button
+                variant="default"
                 onClick={handleCreateLocalRoster}
+                className="gap-1.5 font-semibold"
               >
                 + Add Local Roster
-              </button>
+              </Button>
             )}
           </div>
 
@@ -448,7 +485,7 @@ export function Dashboard() {
               <div className="card" style={{ padding: 40, textAlign: 'center' }}>
                 <div style={{ fontSize: '2rem', marginBottom: 12 }}>⚠️</div>
                 <p style={{ color: 'var(--red-11)', fontWeight: 600, marginBottom: 16 }}>{error}</p>
-                <button className="btn btn-secondary" onClick={() => load()}>Try Again</button>
+                <Button variant="outline" onClick={() => load()}>Try Again</Button>
               </div>
             ) : effectiveActivitiesView === 'calendar' ? (
               <CalendarView
@@ -501,20 +538,22 @@ export function Dashboard() {
                       Page {currentPage} of {totalPages} · {filtered.length} results
                     </span>
                     <div style={{ display: 'flex', gap: 6 }}>
-                      <button
-                        className="btn btn-secondary btn-sm"
+                      <Button
+                        variant="outline"
+                        size="sm"
                         disabled={currentPage === 1}
                         onClick={() => { setCurrentPage(p => p - 1); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
                       >
                         Previous
-                      </button>
-                      <button
-                        className="btn btn-secondary btn-sm"
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
                         disabled={currentPage === totalPages}
                         onClick={() => { setCurrentPage(p => p + 1); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
                       >
                         Next
-                      </button>
+                      </Button>
                     </div>
                   </div>
                 )}
@@ -583,7 +622,9 @@ export function Dashboard() {
 
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 5, flexWrap: 'wrap' }}>
-                          <span className="badge" style={{ background: '#DCFCE7', color: '#166534', border: '1px solid #BBF7D0' }}>Local</span>
+                          <Badge variant="outline" className="h-5 px-2 text-[0.6875rem] font-bold uppercase border-emerald-300 bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">
+                            Local
+                          </Badge>
                           <span style={{ fontWeight: 600, fontSize: '0.9375rem', color: 'var(--slate-12)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                             {title}
                           </span>
@@ -638,20 +679,22 @@ function CalendarSkeleton({ currentMonth }: { currentMonth?: Date }) {
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-            <button
-              className="btn btn-secondary btn-sm"
+            <Button
+              variant="outline"
+              size="sm"
               disabled
-              style={{ padding: '5px 8px', height: 30, opacity: 0.6 }}
+              className="size-7.5 p-0"
             >
               <ChevronLeft size={16} />
-            </button>
-            <button
-              className="btn btn-secondary btn-sm"
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
               disabled
-              style={{ padding: '5px 8px', height: 30, opacity: 0.6 }}
+              className="size-7.5 p-0"
             >
               <ChevronRight size={16} />
-            </button>
+            </Button>
           </div>
           {currentMonth ? (
             <h3 style={{ fontSize: '1.0625rem', fontWeight: 700, color: 'var(--slate-12)', margin: 0, paddingLeft: 4, lineHeight: 1, display: 'flex', alignItems: 'center' }}>
@@ -661,13 +704,14 @@ function CalendarSkeleton({ currentMonth }: { currentMonth?: Date }) {
             <div className="skeleton" style={{ width: 140, height: 20, borderRadius: 4 }} />
           )}
           {!isCurrentMonth && (
-            <button
-              className="btn btn-secondary btn-sm"
+            <Button
+              variant="outline"
+              size="sm"
               disabled
-              style={{ height: 30, padding: '0 12px', fontSize: '0.8125rem', fontWeight: 600, opacity: 0.6, marginLeft: 6 }}
+              className="h-7.5 px-3 text-xs font-semibold ml-1.5"
             >
               Today
-            </button>
+            </Button>
           )}
         </div>
       </div>
@@ -813,22 +857,24 @@ function CalendarView({
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-            <button
-              className="btn btn-secondary btn-sm"
+            <Button
+              variant="outline"
+              size="sm"
               onClick={() => onMonthChange(subMonths(currentMonth, 1))}
               title="Previous Month"
-              style={{ padding: '5px 8px', height: 30 }}
+              className="size-7.5 p-0"
             >
               <ChevronLeft size={16} />
-            </button>
-            <button
-              className="btn btn-secondary btn-sm"
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
               onClick={() => onMonthChange(addMonths(currentMonth, 1))}
               title="Next Month"
-              style={{ padding: '5px 8px', height: 30 }}
+              className="size-7.5 p-0"
             >
               <ChevronRight size={16} />
-            </button>
+            </Button>
           </div>
 
           <h3 style={{ fontSize: '1.0625rem', fontWeight: 700, color: 'var(--slate-12)', margin: 0, paddingLeft: 4, lineHeight: 1, display: 'flex', alignItems: 'center' }}>
@@ -836,20 +882,14 @@ function CalendarView({
           </h3>
 
           {!isCurrentMonth && (
-            <button
-              className="btn btn-secondary btn-sm"
+            <Button
+              variant="outline"
+              size="sm"
               onClick={() => onMonthChange(new Date())}
-              style={{
-                height: 30,
-                padding: '0 12px',
-                fontSize: '0.8125rem',
-                fontWeight: 600,
-                color: 'var(--navy-9)',
-                marginLeft: 6,
-              }}
+              className="h-7.5 px-3 text-xs font-semibold ml-1.5"
             >
               Today
-            </button>
+            </Button>
           )}
         </div>
       </div>
@@ -1117,9 +1157,6 @@ function ActivityCard({
   todayStart.setHours(0, 0, 0, 0);
   const isPast = startDate < todayStart;
 
-  const badgeClass = `badge badge-${activity.type}`;
-  const dotClass = `type-dot type-dot-${activity.type}`;
-
   const location = formatActivityLocation(activity) || null;
 
   return (
@@ -1180,44 +1217,28 @@ function ActivityCard({
       {/* Info */}
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 5, flexWrap: 'wrap' }}>
-          {!isPast && <div className={dotClass} />}
-          <span className={badgeClass} style={isPast ? { opacity: 0.8 } : {}}>{TYPE_LABELS[activity.type]}</span>
+          <Badge
+            variant="outline"
+            className={`h-5 px-2 text-[0.6875rem] font-bold uppercase border ${TYPE_COLOR_STYLES[activity.type] || TYPE_COLOR_STYLES.exercise} ${isPast ? 'opacity-70' : ''}`}
+          >
+            {TYPE_LABELS[activity.type] || 'Activity'}
+          </Badge>
           {isPast && (
-            <span
-              style={{
-                background: 'var(--slate-4)',
-                color: 'var(--slate-11)',
-                fontSize: '0.65rem',
-                fontWeight: 800,
-                textTransform: 'uppercase',
-                padding: '2px 6px',
-                borderRadius: 4,
-                letterSpacing: '0.04em',
-              }}
+            <Badge
+              variant="secondary"
+              className="h-5 px-1.5 text-[0.625rem] font-extrabold uppercase text-slate-600 bg-slate-200/80"
             >
               Past
-            </span>
+            </Badge>
           )}
           {isAttending && (
-            <span
-              style={{
-                height: 20,
-                padding: '0 6px',
-                borderRadius: 4,
-                fontSize: '0.6875rem',
-                fontWeight: 700,
-                color: 'var(--navy-9)',
-                background: 'var(--navy-1)',
-                border: '1px solid var(--navy-3)',
-                letterSpacing: '0.04em',
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 4,
-              }}
+            <Badge
+              variant="outline"
+              className="h-5 px-1.5 text-[0.6875rem] font-bold border-emerald-300 bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300 gap-1"
             >
-              <UserCheck size={11} strokeWidth={2.5} style={{ color: 'var(--navy-8)' }} />
+              <UserCheck size={11} strokeWidth={2.5} />
               {isPast ? 'Attended' : 'Attending'}
-            </span>
+            </Badge>
           )}
           <span style={{ fontWeight: 600, fontSize: '0.9375rem', color: 'var(--slate-12)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
             {activity.referenceDescription || activity.description || `Unnamed ${activity.type}`}

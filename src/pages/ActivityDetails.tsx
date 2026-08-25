@@ -1,10 +1,10 @@
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import * as Label from '@radix-ui/react-label';
-import * as Select from '@radix-ui/react-select';
 import * as Separator from '@radix-ui/react-separator';
-import * as Switch from '@radix-ui/react-switch';
-import * as ToggleGroup from '@radix-ui/react-toggle-group';
 import * as Tooltip from '@radix-ui/react-tooltip';
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Button } from '@/components/ui/button';
+import { Switch } from '@/components/ui/switch';
 import {
   AlertTriangle,
   ArrowLeft,
@@ -22,7 +22,9 @@ import {
   Loader2,
   Mail,
   Map as MapIcon,
+  Maximize2,
   Phone,
+  Play,
   Plus,
   Printer,
   RefreshCw,
@@ -48,6 +50,8 @@ import { useFormState, type FormHeaderData, type FormRowData } from '../hooks/us
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { calculateHours } from '../utils/time';
 import { format } from 'date-fns';
+import type { DepartureWindowMode } from '../api/mapbox';
+import type { ActivityMapViewRef } from '../components/ActivityMapView';
 
 // ── Lazy Loaded Tab Views (Code Splitting) ─────────────────
 const ActivityInfoView = lazy(() =>
@@ -215,6 +219,8 @@ export function ActivityDetails() {
   const [formType, setFormType] = useState(() => localStorage.getItem(`d4h_form_type_${id}`) || '211a');
   const [showCalcHours, setShowCalcHours] = useState(false);
   const [showValidation, setShowValidation] = useState(false);
+  const mapRef = useRef<ActivityMapViewRef | null>(null);
+  const [mapDepartureMode, setMapDepartureMode] = useState<DepartureWindowMode>('baseline');
 
   // Single state object for all 8 column-visibility booleans
   const [columnFlags, setColumnFlags] = useState<ColumnFlags>(() => ({
@@ -467,20 +473,14 @@ export function ActivityDetails() {
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
               <Tooltip.Root>
                 <Tooltip.Trigger asChild>
-                  <button
-                    className="btn btn-sm"
+                  <Button
+                    variant="ghost"
+                    size="sm"
                     onClick={() => navigate('/dashboard')}
-                    style={{
-                      padding: '6px 8px',
-                      flexShrink: 0,
-                      background: 'rgba(255,255,255,0.1)',
-                      color: 'rgba(255,255,255,0.85)',
-                      border: '1px solid rgba(255,255,255,0.15)',
-                      borderRadius: 7,
-                    }}
+                    className="size-8 p-0 bg-white/10 hover:bg-white/20 text-white/90 hover:text-white border border-white/15 rounded-md"
                   >
-                    <ArrowLeft size={17} />
-                  </button>
+                    <ArrowLeft size={16} />
+                  </Button>
                 </Tooltip.Trigger>
                 <Tooltip.Portal>
                   <Tooltip.Content className="tooltip-content" sideOffset={5}>Back to dashboard</Tooltip.Content>
@@ -511,27 +511,15 @@ export function ActivityDetails() {
                 <div style={{ display: 'inline-flex', alignItems: 'stretch', height: 29 }}>
                   <Tooltip.Root>
                     <Tooltip.Trigger asChild>
-                      <button
-                        className="btn btn-sm"
+                      <Button
+                        variant="ghost"
+                        size="sm"
                         onClick={() => window.open(getD4HActivityUrl(currentExercise?.id || id || '', activityType), '_blank', 'noopener,noreferrer')}
-                        style={{
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          gap: 6,
-                          height: '100%',
-                          boxSizing: 'border-box',
-                          background: 'rgba(255,255,255,0.1)',
-                          color: 'rgba(255,255,255,0.85)',
-                          border: '1px solid rgba(255,255,255,0.18)',
-                          borderTopRightRadius: 0,
-                          borderBottomRightRadius: 0,
-                          borderRight: 'none',
-                        }}
+                        className="h-full gap-1.5 px-3 bg-white/10 hover:bg-white/20 text-white/90 hover:text-white border border-white/18 border-r-0 rounded-r-none font-semibold text-xs"
                       >
                         <ExternalLink size={13} className="header-icon-responsive" />
                         <span>D4H</span>
-                      </button>
+                      </Button>
                     </Tooltip.Trigger>
                     <Tooltip.Portal>
                       <Tooltip.Content className="tooltip-content" side="top" sideOffset={5}>
@@ -542,28 +530,19 @@ export function ActivityDetails() {
 
                   <Tooltip.Root>
                     <Tooltip.Trigger asChild>
-                      <button
-                        className="btn btn-sm"
+                      <Button
+                        variant="ghost"
+                        size="sm"
                         onClick={() => pullData()}
                         disabled={isPulling}
-                        style={{
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          height: '100%',
-                          boxSizing: 'border-box',
-                          background: hasPendingChanges ? 'var(--gold-6)' : 'rgba(255,255,255,0.1)',
-                          color: hasPendingChanges ? 'var(--navy-9)' : 'rgba(255,255,255,0.85)',
-                          border: hasPendingChanges ? '1px solid var(--gold-6)' : '1px solid rgba(255,255,255,0.18)',
-                          borderTopLeftRadius: 0,
-                          borderBottomLeftRadius: 0,
-                          paddingLeft: 8,
-                          paddingRight: 8,
-                          fontWeight: hasPendingChanges ? 700 : 600,
-                        }}
+                        className={`h-full px-2 border rounded-l-none font-semibold text-xs ${
+                          hasPendingChanges
+                            ? 'bg-amber-400 hover:bg-amber-500 text-slate-950 border-amber-500'
+                            : 'bg-white/10 hover:bg-white/20 text-white/90 hover:text-white border-white/18'
+                        }`}
                       >
-                        <RefreshCw size={14} style={isPulling ? { animation: 'spin 1s linear infinite' } : {}} />
-                      </button>
+                        <RefreshCw size={14} className={isPulling ? 'animate-spin' : ''} />
+                      </Button>
                     </Tooltip.Trigger>
                     <Tooltip.Portal>
                       <Tooltip.Content className="tooltip-content" side="top" sideOffset={5} style={{ maxWidth: 320, textAlign: 'left' }}>
@@ -628,27 +607,27 @@ export function ActivityDetails() {
           >
             {/* View Switcher (only when connected to D4H and not local) */}
             {isD4HConnected ? (
-              <ToggleGroup.Root
-                type="single"
+              <Tabs
                 value={activeView}
                 onValueChange={(v) => {
                   if (v) handleViewChange(v as 'info' | 'roster' | 'map');
                 }}
-                className="toggle-group"
               >
-                <ToggleGroup.Item value="info" className="toggle-item" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <Info size={14} />
-                  <span>Info</span>
-                </ToggleGroup.Item>
-                <ToggleGroup.Item value="roster" className="toggle-item" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <FileText size={14} />
-                  <span>Roster</span>
-                </ToggleGroup.Item>
-                <ToggleGroup.Item value="map" className="toggle-item" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <MapIcon size={14} />
-                  <span>Map</span>
-                </ToggleGroup.Item>
-              </ToggleGroup.Root>
+                <TabsList>
+                  <TabsTrigger value="info">
+                    <Info size={14} />
+                    <span>Info</span>
+                  </TabsTrigger>
+                  <TabsTrigger value="roster">
+                    <FileText size={14} />
+                    <span>Roster</span>
+                  </TabsTrigger>
+                  <TabsTrigger value="map">
+                    <MapIcon size={14} />
+                    <span>Map</span>
+                  </TabsTrigger>
+                </TabsList>
+              </Tabs>
             ) : (
               <div />
             )}
@@ -666,23 +645,170 @@ export function ActivityDetails() {
               </div>
             )}
 
+            {/* Map Actions in top header row (in line with switcher) */}
+            {!isLocal && activeView === 'map' && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginLeft: 'auto', flexWrap: 'wrap' }}>
+                {/* 1. Add Carpool Button */}
+                <Button
+                  variant="default"
+                  size="sm"
+                  onClick={() => mapRef.current?.openAddCarpool()}
+                  className="h-8 gap-1.5 font-semibold"
+                  title="Create a new carpool group"
+                >
+                  <Plus size={14} />
+                  <span>Add Carpool</span>
+                </Button>
+
+                {/* 2. Traffic / Departure Window Selector */}
+                <DropdownMenu.Root>
+                  <DropdownMenu.Trigger asChild>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-8 gap-1.5 px-2.5 text-xs font-semibold"
+                      title="Select departure time window for traffic and routing calculations"
+                    >
+                      <Clock size={13} className="text-slate-500" />
+                      <span className="text-slate-500 font-medium">Traffic:</span>
+                      <span>
+                        {mapDepartureMode === 'baseline'
+                          ? 'Average'
+                          : mapDepartureMode === 'now'
+                            ? 'Leave Now'
+                            : mapDepartureMode === 'activity_start'
+                              ? 'Arrive by start time'
+                              : mapDepartureMode === 'morning_rush'
+                                ? 'Morning Rush (07:30)'
+                                : mapDepartureMode === 'midday'
+                                  ? 'Midday (12:00)'
+                                  : 'Evening Rush (17:00)'}
+                      </span>
+                      <ChevronDown size={12} className="text-slate-500 ml-0.5" />
+                    </Button>
+                  </DropdownMenu.Trigger>
+
+                  <DropdownMenu.Portal>
+                    <DropdownMenu.Content
+                      className="select-content no-print animate-fade-in"
+                      align="end"
+                      sideOffset={6}
+                      style={{
+                        minWidth: 210,
+                        background: 'white',
+                        border: '1px solid var(--slate-4)',
+                        borderRadius: 8,
+                        padding: 4,
+                        boxShadow: '0 4px 16px rgba(0,0,0,0.12)',
+                        zIndex: 9999,
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: 2,
+                      }}
+                    >
+                      <div
+                        style={{
+                          padding: '6px 8px 4px',
+                          fontSize: '0.6875rem',
+                          fontWeight: 700,
+                          color: 'var(--slate-9)',
+                          textTransform: 'uppercase',
+                          letterSpacing: '0.05em',
+                        }}
+                      >
+                        Departure Window
+                      </div>
+
+                      {[
+                        { value: 'baseline', label: 'Average', desc: 'Standard traffic estimates' },
+                        { value: 'now', label: 'Leave Now', desc: 'Real-time live traffic' },
+                        { value: 'activity_start', label: 'Arrive by start time', desc: 'Target 30m prior to start' },
+                        { value: 'morning_rush', label: 'Morning Rush (07:30)', desc: 'Peak morning commute' },
+                        { value: 'midday', label: 'Midday (12:00)', desc: 'Midday traffic flow' },
+                        { value: 'evening_rush', label: 'Evening Rush (17:00)', desc: 'Peak evening commute' },
+                      ].map((opt) => {
+                        const isSelected = mapDepartureMode === opt.value;
+                        return (
+                          <DropdownMenu.Item
+                            key={opt.value}
+                            className="select-item"
+                            onSelect={() => setMapDepartureMode(opt.value as DepartureWindowMode)}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'space-between',
+                              padding: '6px 8px',
+                              borderRadius: 6,
+                              fontSize: '0.8125rem',
+                              fontWeight: isSelected ? 600 : 500,
+                              color: isSelected ? 'var(--navy-9)' : 'var(--slate-12)',
+                              background: isSelected ? 'var(--navy-1)' : 'transparent',
+                              cursor: 'pointer',
+                              outline: 'none',
+                              transition: 'background 0.12s ease',
+                            }}
+                          >
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                              <span>{opt.label}</span>
+                              <span style={{ fontSize: '0.6875rem', color: 'var(--slate-9)', fontWeight: 400 }}>
+                                {opt.desc}
+                              </span>
+                            </div>
+                            {isSelected && (
+                              <Check size={14} style={{ color: 'var(--navy-9)', marginLeft: 8, flexShrink: 0 }} />
+                            )}
+                          </DropdownMenu.Item>
+                        );
+                      })}
+                    </DropdownMenu.Content>
+                  </DropdownMenu.Portal>
+                </DropdownMenu.Root>
+
+                {/* 3. Play Animation Icon Button */}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => mapRef.current?.playAnimation()}
+                  className="size-8 p-0"
+                  title="Replay animated corridor driving routes"
+                  aria-label="Replay animated routes"
+                >
+                  <Play size={13} className="ml-0.5" />
+                </Button>
+
+                {/* 4. Fit All Icon Button */}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => mapRef.current?.fitAll()}
+                  className="size-8 p-0 map-fit-all-btn"
+                  title="Fit map to all responders and incident"
+                  aria-label="Fit map to all responders and incident"
+                >
+                  <Maximize2 size={13} />
+                </Button>
+              </div>
+            )}
+
             {/* Options and Export buttons (only in roster view, shown for both local and D4H activities) */}
             {(!isD4HConnected || activeView === 'roster') && (
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginLeft: 'auto' }}>
                 {/* Options dropdown */}
                 <DropdownMenu.Root>
                   <DropdownMenu.Trigger asChild>
-                    <button
-                      className="btn btn-secondary btn-sm"
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: 6,
-                        cursor: 'pointer',
-                        background: hasConflicts ? 'var(--red-3)' : hasLocalChanges ? 'var(--amber-3)' : undefined,
-                        color: hasConflicts ? 'var(--red-11)' : hasLocalChanges ? 'var(--amber-11)' : undefined,
-                        borderColor: hasConflicts ? 'var(--red-7)' : hasLocalChanges ? 'var(--amber-7)' : undefined,
-                      }}
+                    <Button
+                      variant={hasConflicts ? 'destructive' : 'outline'}
+                      size="sm"
+                      className="h-8 gap-1.5 font-semibold"
+                      style={
+                        !hasConflicts && hasLocalChanges
+                          ? {
+                              background: 'var(--amber-3)',
+                              color: 'var(--amber-11)',
+                              borderColor: 'var(--amber-7)',
+                            }
+                          : undefined
+                      }
                     >
                       {hasConflicts && <AlertTriangle size={13} />}
                       {!hasConflicts && hasLocalChanges && (
@@ -698,7 +824,7 @@ export function ActivityDetails() {
                       )}
                       <span>Options</span>
                       <ChevronDown size={13} />
-                    </button>
+                    </Button>
                   </DropdownMenu.Trigger>
 
                   <DropdownMenu.Portal>
@@ -730,9 +856,7 @@ export function ActivityDetails() {
                           <Clock size={14} style={{ color: 'var(--slate-9)' }} />
                           Auto calculate hours
                         </div>
-                        <Switch.Root checked={showCalcHours} className="switch-root" style={{ pointerEvents: 'none' }}>
-                          <Switch.Thumb className="switch-thumb" />
-                        </Switch.Root>
+                        <Switch checked={showCalcHours} className="pointer-events-none" />
                       </DropdownMenu.Item>
 
                       {formType === 'fitness' && (
@@ -758,9 +882,7 @@ export function ActivityDetails() {
                             <Check size={14} style={{ color: 'var(--slate-9)' }} />
                             Data validation
                           </div>
-                          <Switch.Root checked={showValidation} className="switch-root" style={{ pointerEvents: 'none' }}>
-                            <Switch.Thumb className="switch-thumb" />
-                          </Switch.Root>
+                          <Switch checked={showValidation} className="pointer-events-none" />
                         </DropdownMenu.Item>
                       )}
 
@@ -813,9 +935,7 @@ export function ActivityDetails() {
                           <Highlighter size={14} style={{ color: 'var(--slate-9)' }} />
                           Highlight
                         </div>
-                        <Switch.Root checked={highlightChanges} className="switch-root" style={{ pointerEvents: 'none' }}>
-                          <Switch.Thumb className="switch-thumb" />
-                        </Switch.Root>
+                        <Switch checked={highlightChanges} className="pointer-events-none" />
                       </DropdownMenu.Item>
 
                       <DropdownMenu.Item
@@ -869,23 +989,15 @@ export function ActivityDetails() {
                 {/* Export dropdown */}
                 <DropdownMenu.Root>
                   <DropdownMenu.Trigger asChild>
-                    <button
-                      className="btn btn-sm"
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: 6,
-                        background: 'var(--gold-6)',
-                        color: 'var(--navy-9)',
-                        fontWeight: 700,
-                        border: '1px solid var(--gold-7)',
-                        cursor: 'pointer',
-                      }}
+                    <Button
+                      variant="default"
+                      size="sm"
+                      className="h-8 gap-1.5 font-semibold"
                     >
                       <FileText size={14} className="header-icon-responsive" />
                       <span>Export</span>
                       <ChevronDown size={13} />
-                    </button>
+                    </Button>
                   </DropdownMenu.Trigger>
                   <DropdownMenu.Portal>
                     <DropdownMenu.Content className="select-content" align="end" sideOffset={6} style={{ padding: 4, minWidth: 160 }}>
@@ -974,12 +1086,14 @@ export function ActivityDetails() {
                 }
               >
                 <ActivityMapView
+                  ref={mapRef}
                   activity={currentExercise}
                   activityType={activityType}
                   activityName={activityName}
                   attendees={attendees}
                   members={members}
                   isLoading={isLoading}
+                  departureMode={mapDepartureMode}
                 />
               </Suspense>
             </div>
@@ -1008,71 +1122,126 @@ export function ActivityDetails() {
                   </div>
 
                   <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-                    {/* Form type select */}
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <Label.Root style={{ fontSize: '0.8125rem', fontWeight: 500, color: 'var(--slate-11)', whiteSpace: 'nowrap' }}>
-                        Form Type
-                      </Label.Root>
-                      <Select.Root value={formType} onValueChange={handleFormTypeChange}>
-                        <Select.Trigger className="select-trigger">
-                          <Select.Value />
-                          <Select.Icon><ChevronDown size={14} /></Select.Icon>
-                        </Select.Trigger>
-                        <Select.Portal>
-                          <Select.Content className="select-content" position="popper" sideOffset={6}>
-                            <Select.Viewport>
-                              {FORM_TYPES.map(ft => (
-                                <Select.Item key={ft.value} value={ft.value} className="select-item">
-                                  <Select.ItemText>{ft.label}</Select.ItemText>
-                                  <Select.ItemIndicator style={{ marginLeft: 'auto' }}>
-                                    <Check size={13} style={{ color: 'var(--indigo-9)' }} />
-                                  </Select.ItemIndicator>
-                                </Select.Item>
-                              ))}
-                            </Select.Viewport>
-                          </Select.Content>
-                        </Select.Portal>
-                      </Select.Root>
-                    </div>
-
-                    {/* Data-driven column toggles dropdown */}
+                    {/* Form type dropdown (styled like traffic dropdown) */}
                     <DropdownMenu.Root>
                       <DropdownMenu.Trigger asChild>
-                        <button className="select-trigger" style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, width: 'auto' }}>
-                          <span>Columns</span>
-                          <ChevronDown size={14} />
-                        </button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-8 gap-1.5 px-2.5 text-xs font-semibold"
+                          title="Select form type"
+                        >
+                          <span className="text-slate-500 font-medium">Form:</span>
+                          <span>{FORM_TYPES.find(ft => ft.value === formType)?.label || formType}</span>
+                          <ChevronDown size={12} className="text-slate-500 ml-0.5" />
+                        </Button>
                       </DropdownMenu.Trigger>
 
                       <DropdownMenu.Portal>
                         <DropdownMenu.Content
-                          className="select-content"
+                          className="select-content no-print animate-fade-in"
                           align="start"
                           sideOffset={6}
-                          style={{ padding: 4, width: 'max-content' }}
+                          style={{
+                            minWidth: 170,
+                            background: 'white',
+                            border: '1px solid var(--slate-4)',
+                            borderRadius: 8,
+                            padding: 4,
+                            boxShadow: '0 4px 16px rgba(0,0,0,0.12)',
+                            zIndex: 9999,
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: 2,
+                          }}
+                        >
+                          {FORM_TYPES.map((ft) => {
+                            const isSelected = formType === ft.value;
+                            return (
+                              <DropdownMenu.Item
+                                key={ft.value}
+                                className="select-item"
+                                onSelect={() => handleFormTypeChange(ft.value)}
+                                style={{
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'space-between',
+                                  padding: '6px 10px',
+                                  borderRadius: 6,
+                                  fontSize: '0.8125rem',
+                                  fontWeight: isSelected ? 600 : 500,
+                                  color: isSelected ? 'var(--navy-9)' : 'var(--slate-12)',
+                                  background: isSelected ? 'var(--navy-1)' : 'transparent',
+                                  cursor: 'pointer',
+                                  outline: 'none',
+                                  transition: 'background 0.12s ease',
+                                }}
+                              >
+                                <span>{ft.label}</span>
+                                {isSelected && (
+                                  <Check size={14} style={{ color: 'var(--navy-9)', marginLeft: 8, flexShrink: 0 }} />
+                                )}
+                              </DropdownMenu.Item>
+                            );
+                          })}
+                        </DropdownMenu.Content>
+                      </DropdownMenu.Portal>
+                    </DropdownMenu.Root>
+
+                    {/* Data-driven column toggles dropdown */}
+                    <DropdownMenu.Root>
+                      <DropdownMenu.Trigger asChild>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-8 gap-1.5 px-2.5 text-xs font-semibold"
+                        >
+                          <span>Columns</span>
+                          <ChevronDown size={12} className="text-slate-500 ml-0.5" />
+                        </Button>
+                      </DropdownMenu.Trigger>
+
+                      <DropdownMenu.Portal>
+                        <DropdownMenu.Content
+                          className="select-content no-print animate-fade-in"
+                          align="start"
+                          sideOffset={6}
+                          style={{
+                            minWidth: 200,
+                            background: 'white',
+                            border: '1px solid var(--slate-4)',
+                            borderRadius: 8,
+                            padding: 4,
+                            boxShadow: '0 4px 16px rgba(0,0,0,0.12)',
+                            zIndex: 9999,
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: 2,
+                          }}
                         >
                           {COLUMN_TOGGLES.map(({ key, label, icon: Icon, className }) => (
                             <DropdownMenu.Item
                               key={key}
                               onSelect={(e) => { e.preventDefault(); toggleColumn(key); }}
                               style={{
-                                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                                gap: 16, padding: '7px 10px', borderRadius: 6, cursor: 'pointer', outline: 'none',
-                                fontSize: '0.8125rem', color: 'var(--slate-12)',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'space-between',
+                                gap: 16,
+                                padding: '6px 10px',
+                                borderRadius: 6,
+                                cursor: 'pointer',
+                                outline: 'none',
+                                fontSize: '0.8125rem',
+                                color: 'var(--slate-12)',
                               }}
                               className={`select-item ${className || ''}`}
                             >
                               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                                 <Icon size={14} style={{ color: 'var(--slate-9)' }} />
-                                {label}
+                                <span>{label}</span>
                               </div>
-                              <Switch.Root
-                                checked={columnFlags[key]}
-                                className="switch-root"
-                                style={{ pointerEvents: 'none' }}
-                              >
-                                <Switch.Thumb className="switch-thumb" />
-                              </Switch.Root>
+                              <Switch checked={columnFlags[key]} className="pointer-events-none" />
                             </DropdownMenu.Item>
                           ))}
                         </DropdownMenu.Content>
@@ -1087,18 +1256,22 @@ export function ActivityDetails() {
                           <Label.Root style={{ fontSize: '0.8125rem', fontWeight: 500, color: 'var(--slate-11)', whiteSpace: 'nowrap' }}>
                             Add rows
                           </Label.Root>
-                          <button
-                            className="btn btn-secondary btn-sm"
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-7 px-2 text-xs font-semibold gap-1"
                             onClick={() => addBlankRows(1)}
                           >
                             <Plus size={13} /> 1
-                          </button>
-                          <button
-                            className="btn btn-secondary btn-sm"
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-7 px-2 text-xs font-semibold gap-1"
                             onClick={() => addBlankRows(5)}
                           >
                             <Plus size={13} /> 5
-                          </button>
+                          </Button>
                         </div>
                       </>
                     )}
@@ -1125,9 +1298,14 @@ export function ActivityDetails() {
                       Remote D4H changes conflict with your local edits. Hover over red cells to see remote values, or use the Changes menu to accept D4H values.
                     </p>
                   </div>
-                  <button className="btn btn-danger btn-sm" style={{ marginLeft: 'auto', flexShrink: 0 }} onClick={() => fixConflicts()}>
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    className="ml-auto shrink-0 font-semibold"
+                    onClick={() => fixConflicts()}
+                  >
                     Fix conflicts
-                  </button>
+                  </Button>
                 </div>
               )}
 
@@ -1173,22 +1351,24 @@ export function ActivityDetails() {
                               })()}
                             </span>
                             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                              <button
-                                className="btn btn-secondary btn-sm"
-                                style={{ fontSize: '0.75rem', padding: '3px 8px', height: 'auto' }}
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="h-6 px-2 text-[0.6875rem] font-semibold gap-1"
                                 onClick={() => addBlankRows(1, pIdx)}
                                 title="Add 1 row"
                               >
-                                <Plus size={12} style={{ marginRight: 4 }} /> Add Row
-                              </button>
-                              <button
-                                className="btn btn-secondary btn-sm"
-                                style={{ fontSize: '0.75rem', padding: '3px 8px', height: 'auto' }}
+                                <Plus size={12} /> Add Row
+                              </Button>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="h-6 px-2 text-[0.6875rem] font-semibold"
                                 onClick={() => addBlankRows(5, pIdx)}
                                 title="Add 5 rows"
                               >
                                 + 5 Rows
-                              </button>
+                              </Button>
                             </div>
                           </div>
 
