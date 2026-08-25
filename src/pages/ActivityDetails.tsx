@@ -36,7 +36,7 @@ import type { LucideIcon } from 'lucide-react';
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { Navigate, useNavigate, useLocation, useParams } from 'react-router-dom';
 import { useReactToPrint } from 'react-to-print';
-import { getD4HActivityUrl } from '../api/d4h';
+import { getD4HActivityUrl, getActivity, getPreviousOpPeriodAttendees } from '../api/d4h';
 import type { Activity } from '../api/d4h';
 import { ActivityStatusBadges } from '../components/ActivityStatusBadges';
 import { ICS211AForm } from '../components/ICS211AForm';
@@ -64,10 +64,6 @@ const FORM_TYPES = [
   { value: '211b', label: 'ICS 211B' },
   { value: 'fitness', label: 'ICS 211 Fitness' },
 ];
-
-const TYPE_LABELS: Record<string, string> = {
-  exercise: 'Exercise', event: 'Event', incident: 'Incident', local: 'Local',
-};
 
 /** Config for optional column toggles (data-driven dropdown) */
 const COLUMN_TOGGLES: { key: keyof ColumnFlags; label: string; icon: LucideIcon; className?: string }[] = [
@@ -111,12 +107,82 @@ export function ActivityDetails() {
       return (cache[id] as Activity) || null;
     } catch { return null; }
   }, [exercise, id]);
-  const currentExercise = exercise || cachedActivity;
+
+  const localRosterExists = useMemo(() => {
+    if (!id || !id.startsWith('local_')) return false;
+    if (exercise) return true;
+    try {
+      const savedList = localStorage.getItem('fitnessqual_local_rosters');
+      const rosters = savedList ? JSON.parse(savedList) : [];
+      if (rosters.some((r: { id: string }) => r.id === id)) return true;
+    } catch {
+      // ignore JSON parse error
+    }
+    if (localStorage.getItem(`d4h_form_${id}`)) return true;
+    return false;
+  }, [id, exercise]);
+
+  const [fetchedActivity, setFetchedActivity] = useState<Activity | null>(null);
+  const [isResolving, setIsResolving] = useState<boolean>(() => {
+    if (exercise || cachedActivity) return false;
+    if (id && id.startsWith('local_')) return false;
+    if (!id || !contextId) return false;
+    const cid = parseInt(contextId, 10);
+    const numId = parseInt(id, 10);
+    if (isNaN(cid) || isNaN(numId)) return false;
+    return true;
+  });
+
+  useEffect(() => {
+    if (exercise || cachedActivity) return;
+    if (!id) {
+      navigate('/dashboard', { replace: true });
+      return;
+    }
+
+    if (id.startsWith('local_')) {
+      if (!localRosterExists) {
+        navigate('/dashboard', { replace: true });
+      }
+      return;
+    }
+
+    const cid = parseInt(contextId || '', 10);
+    const numId = parseInt(id, 10);
+    if (isNaN(cid) || isNaN(numId)) {
+      navigate('/dashboard', { replace: true });
+      return;
+    }
+
+    let isMounted = true;
+    getActivity(cid, numId)
+      .then((act) => {
+        if (!isMounted) return;
+        if (act) {
+          setFetchedActivity(act);
+          setIsResolving(false);
+        } else {
+          navigate('/dashboard', { replace: true });
+        }
+      })
+      .catch(() => {
+        if (!isMounted) return;
+        navigate('/dashboard', { replace: true });
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [exercise, cachedActivity, id, contextId, localRosterExists, navigate]);
+
+  const currentExercise = exercise || cachedActivity || fetchedActivity;
+
+  const isLocal = typeof id === 'string' && id.startsWith('local_');
 
   const [showResetModal, setShowResetModal] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [activeView, setActiveView] = useState<'info' | 'roster' | 'map'>(() => {
-    if (!id) return 'info';
+    if (!id || id.startsWith('local_')) return 'roster';
     const saved = localStorage.getItem(`d4h_active_view_${id}`);
     if (saved === 'info' || saved === 'roster' || saved === 'map') {
       return saved;
@@ -126,6 +192,10 @@ export function ActivityDetails() {
 
   useEffect(() => {
     if (!id) return;
+    if (id.startsWith('local_')) {
+      setActiveView('roster');
+      return;
+    }
     const saved = localStorage.getItem(`d4h_active_view_${id}`);
     if (saved === 'info' || saved === 'roster' || saved === 'map') {
       setActiveView(saved);
@@ -135,6 +205,7 @@ export function ActivityDetails() {
   }, [id]);
 
   const handleViewChange = (view: 'info' | 'roster' | 'map') => {
+    if (isLocal) return;
     setActiveView(view);
     if (id) {
       localStorage.setItem(`d4h_active_view_${id}`, view);
@@ -180,7 +251,15 @@ export function ActivityDetails() {
     addBlankRows, resetChanges, fixConflicts, pullData, removeRow, restoreRow,
   } = useFormState(id ? (id.startsWith('local_') ? id : parseInt(id, 10)) : undefined, contextId, currentExercise, teamTitle);
 
-  const isLocal = typeof id === 'string' && id.startsWith('local_');
+  // Pre-load immediate previous day's op period responding personnel
+  useEffect(() => {
+    if (!contextId || !currentExercise || isLocal) return;
+    const cid = parseInt(contextId, 10);
+    if (!isNaN(cid)) {
+      getPreviousOpPeriodAttendees(cid, currentExercise, attendees).catch(() => {});
+    }
+  }, [contextId, currentExercise, attendees, isLocal]);
+
   const isD4HConnected = Boolean(localStorage.getItem('d4h_token') && !isLocal);
   const activityName = isLocal && formState?.headers?.exerciseName?.value
     ? formState.headers.exerciseName.value
@@ -344,15 +423,37 @@ export function ActivityDetails() {
     return <ICS211AForm ref={props.ref} {...shared} />;
   };
 
+  if (isResolving || (!currentExercise && !isLocal) || (isLocal && !localRosterExists)) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center text-slate-400" style={{ height: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: 'var(--navy-12, #020617)' }}>
+        <Loader2 className="w-8 h-8 animate-spin text-emerald-500 mb-3" style={{ animation: 'spin 1s linear infinite' }} />
+        <span className="text-sm font-medium" style={{ color: 'var(--slate-10)' }}>Loading activity...</span>
+      </div>
+    );
+  }
+
+  const isMapView = !isLocal && activeView === 'map';
+
   return (
     <Tooltip.Provider delayDuration={400}>
-      <div className="app-bg" style={{ minHeight: '100vh', paddingBottom: 16 }}>
+      <div
+        className={`app-bg ${isMapView ? 'map-view-active' : ''}`}
+        style={{
+          minHeight: '100vh',
+          height: isMapView ? '100vh' : undefined,
+          maxHeight: isMapView ? '100vh' : undefined,
+          display: 'flex',
+          flexDirection: 'column',
+          boxSizing: 'border-box',
+          overflow: isMapView ? 'hidden' : undefined,
+        }}
+      >
 
         {/* ── Header ─────────────────────────────────────── */}
         <header className="app-header no-print">
           <div
             style={{
-              maxWidth: 1200,
+              maxWidth: 1300,
               margin: '0 auto',
               padding: '0 24px',
               height: 60,
@@ -387,17 +488,6 @@ export function ActivityDetails() {
               </Tooltip.Root>
 
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
-                <span
-                  className={`badge badge-${activityType}`}
-                  style={{
-                    flexShrink: 0,
-                    background: 'rgba(255,255,255,0.12)',
-                    color: 'rgba(220,195,148,0.9)',
-                    border: '1px solid rgba(220,195,148,0.25)',
-                  }}
-                >
-                  {TYPE_LABELS[activityType]}
-                </span>
                 <span
                   style={{
                     fontWeight: 700,
@@ -509,9 +599,16 @@ export function ActivityDetails() {
 
         <main
           style={{
-            maxWidth: 1200,
+            maxWidth: 1300,
+            width: '100%',
             margin: '0 auto',
             padding: '16px 16px 0',
+            flex: isMapView ? 1 : undefined,
+            display: isMapView ? 'flex' : undefined,
+            flexDirection: isMapView ? 'column' : undefined,
+            minHeight: isMapView ? 0 : undefined,
+            boxSizing: 'border-box',
+            overflow: isMapView ? 'hidden' : undefined,
             WebkitPrintColorAdjust: 'exact',
             printColorAdjust: 'exact',
           } as React.CSSProperties}
@@ -523,9 +620,10 @@ export function ActivityDetails() {
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'space-between',
-              marginBottom: 20,
+              marginBottom: 16,
               flexWrap: 'wrap',
               gap: 12,
+              flexShrink: 0,
             }}
           >
             {/* View Switcher (only when connected to D4H and not local) */}
@@ -835,7 +933,7 @@ export function ActivityDetails() {
           </div>
 
           {/* VIEW 1: INFO VIEW */}
-          {activeView === 'info' && (
+          {!isLocal && activeView === 'info' && (
             <Suspense
               fallback={
                 <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: 400, gap: 16 }}>
@@ -855,6 +953,7 @@ export function ActivityDetails() {
                 members={members}
                 medicalMap={medicalMap}
                 technicalMap={technicalMap}
+                isLocal={isLocal}
                 onSwitchToRoster={() => handleViewChange('roster')}
                 onSwitchToMap={() => handleViewChange('map')}
               />
@@ -862,11 +961,11 @@ export function ActivityDetails() {
           )}
 
           {/* VIEW 2: MAP VIEW */}
-          {activeView === 'map' && (
-            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+          {!isLocal && activeView === 'map' && (
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, height: '100%', width: '100%' }}>
               <Suspense
                 fallback={
-                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: 400, gap: 16 }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', minHeight: 400, gap: 16 }}>
                     <Loader2 size={36} style={{ color: 'var(--indigo-9)', animation: 'spin 1s linear infinite' }} />
                     <p style={{ fontSize: '0.9375rem', color: 'var(--slate-10)', fontWeight: 500 }}>
                       Loading Map View…
@@ -887,7 +986,7 @@ export function ActivityDetails() {
           )}
 
           {/* VIEW 3: ROSTER / FORM VIEW */}
-          {activeView === 'roster' && (
+          {(isLocal || activeView === 'roster') && (
             <>
               {/* ── Form Controls Toolbar ──────────────────────── */}
               <div
@@ -906,7 +1005,6 @@ export function ActivityDetails() {
                     <span style={{ fontWeight: 600, fontSize: '0.9375rem', color: 'var(--slate-12)' }}>
                       Form Builder
                     </span>
-                    <span style={{ fontSize: '0.8125rem', color: 'var(--slate-10)' }}>· auto-saved locally</span>
                   </div>
 
                   <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>

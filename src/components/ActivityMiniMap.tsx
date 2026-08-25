@@ -82,8 +82,21 @@ export const ActivityMiniMap: React.FC<ActivityMiniMapProps> = ({
         }
       }, 150);
 
+      let resizeObserver: ResizeObserver | null = null;
+      if (typeof ResizeObserver !== 'undefined' && mapContainerRef.current) {
+        resizeObserver = new ResizeObserver(() => {
+          if (mapInstanceRef.current) {
+            mapInstanceRef.current.invalidateSize();
+          }
+        });
+        resizeObserver.observe(mapContainerRef.current);
+      }
+
       return () => {
         clearTimeout(timer);
+        if (resizeObserver) {
+          resizeObserver.disconnect();
+        }
         if (mapInstanceRef.current) {
           mapInstanceRef.current.remove();
           mapInstanceRef.current = null;

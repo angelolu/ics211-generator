@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import type { Activity, Attendee, UserPermissions } from '../api/d4h';
 import {
+  canUserRespondToActivity,
   createUserAttendance,
   getCurrentUserPermissions,
   getUserAttendanceForActivity,
@@ -96,27 +97,17 @@ export const ActivityStatusBadges: React.FC<ActivityStatusBadgesProps> = ({
   const effectiveStatus = userAttendance?.status?.toUpperCase() || (isMarkedAttending ? 'ATTENDING' : null);
 
   const canRespondToEvent = useMemo(() => {
-    if (isLocal || isPast || !contextId || !activity?.id) return false;
-
-    const actType = (activityType || activity.type || 'exercise').toLowerCase();
-    const hasActivityAdminPermission =
-      actType === 'incident'
-        ? userPermissions.canUpdateIncident
-        : actType === 'event'
-        ? userPermissions.canUpdateEvent
-        : userPermissions.canUpdateExercise;
-
-    const hasCreatePermission =
-      userPermissions.canCreateAttendance || userPermissions.canUpdateAllAttendance || hasActivityAdminPermission;
-
-    if (hasCreatePermission) return true;
-
-    const hasExistingAttendanceRecord = Boolean(
-      userAttendance?.id ||
-      attendees.some((a) => a.member?.id === effectiveMemberId && a.id)
-    );
-
-    return userPermissions.canUpdateOwnAttendance && hasExistingAttendanceRecord;
+    return canUserRespondToActivity({
+      isLocal,
+      isPast,
+      contextId,
+      activityId: activity?.id,
+      activityType: activityType || activity?.type,
+      userPermissions,
+      userAttendance,
+      attendees,
+      effectiveMemberId,
+    });
   }, [
     isLocal,
     isPast,

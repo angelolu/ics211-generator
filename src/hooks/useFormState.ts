@@ -306,11 +306,19 @@ export function useFormState(exerciseId: number | string | undefined, contextId:
   useEffect(() => {
     if (!exerciseId) return;
     const isLocal = typeof exerciseId === 'string' && exerciseId.startsWith('local_');
-    const currentEx = exerciseRef.current;
-    if (!isLocal && (isNaN(contextIdNum) || !currentEx)) return;
+    if (!isLocal && isNaN(contextIdNum)) return;
 
     const loadInitialData = async () => {
       try {
+        let currentEx = exerciseRef.current;
+        if (!isLocal && !currentEx) {
+          currentEx = await getActivity(contextIdNum, exerciseId as number);
+        }
+        if (!isLocal && !currentEx) {
+          setIsLoading(false);
+          return;
+        }
+
         const savedData = localStorage.getItem(storageKey);
         if (savedData) {
           const parsed = JSON.parse(savedData);
@@ -571,6 +579,16 @@ export function useFormState(exerciseId: number | string | undefined, contextId:
         }
 
         if (isLocal) {
+          const savedList = localStorage.getItem('fitnessqual_local_rosters');
+          const rosters = savedList ? JSON.parse(savedList) : [];
+          const existsInList = rosters.some((r: { id: string }) => r.id === exerciseId);
+          const hasPassedExercise = Boolean(exerciseRef.current);
+
+          if (!existsInList && !hasPassedExercise) {
+            setIsLoading(false);
+            return;
+          }
+
           const headers: FormHeaderData = {
             exerciseName: createCell(exercise?.title || 'New Local Roster'),
             date: createCell(format(new Date(), 'MM/dd/yyyy')),

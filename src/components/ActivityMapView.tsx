@@ -24,7 +24,7 @@ import {
 } from 'lucide-react';
 import { format, isSameDay } from 'date-fns';
 import type { Activity, Attendee, Member } from '../api/d4h';
-import { formatActivityLocation, getActivityStreetAddress, getMemberLocationQuery, isMemberOutOfStateOrCountry } from '../api/d4h';
+import { formatActivityLocation, getActivityStreetAddress, getMemberLocationQuery, isMemberOutOfStateOrCountry, getPreviousOpPeriodAttendees } from '../api/d4h';
 import {
   getMapboxToken,
   geocodeAddress,
@@ -32,7 +32,10 @@ import {
   getDrivingRoute,
   getMultiStopDrivingRoute,
   calculateDistanceMiles,
+  calculateBearing,
+  calculateBearingDiff,
   MAX_REASONABLE_DISTANCE_MILES,
+  isOverOneHourAwayRadial,
   isDrivingRouteCached,
   isMultiStopRouteCached,
   type DrivingRouteResult,
@@ -40,6 +43,42 @@ import {
   type DepartureWindowMode,
   type RouteOptions,
 } from '../api/mapbox';
+import { Group, Panel, Separator, type Layout } from 'react-resizable-panels';
+import { safeSetLocalStorageItem } from '../api/storage';
+
+type WindowType = 'wide' | 'medium' | 'narrow';
+
+function getWindowType(): WindowType {
+  if (typeof window === 'undefined') return 'wide';
+  const width = window.innerWidth;
+  if (width >= 1200) return 'wide';
+  if (width >= 900) return 'medium';
+  return 'narrow';
+}
+
+const DEFAULT_PANEL_LAYOUTS: Record<WindowType, Layout> = {
+  wide: { 'map-panel': 68, 'sidebar-panel': 32 },
+  medium: { 'map-panel': 60, 'sidebar-panel': 40 },
+  narrow: { 'map-panel': 50, 'sidebar-panel': 50 },
+};
+
+function getPersistedLayout(type: WindowType): Layout {
+  try {
+    const saved = localStorage.getItem(`fitnessqual_panel_layout_${type}`);
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (
+        parsed &&
+        typeof parsed === 'object' &&
+        typeof parsed['map-panel'] === 'number' &&
+        typeof parsed['sidebar-panel'] === 'number'
+      ) {
+        return parsed;
+      }
+    }
+  } catch { }
+  return DEFAULT_PANEL_LAYOUTS[type];
+}
 
 interface ActivityMapViewProps {
   activity: Activity | null;
@@ -131,15 +170,56 @@ export const ActivityMapView: React.FC<ActivityMapViewProps> = ({
   isLoading,
 }) => {
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
+  const [mapContainerEl, setMapContainerEl] = useState<HTMLDivElement | null>(null);
   const mapInstanceRef = useRef<mapboxgl.Map | null>(null);
   const markersRef = useRef<Record<string, mapboxgl.Marker>>({});
   const markerElementsRef = useRef<Record<number, HTMLDivElement>>({});
   const animFrameIdRef = useRef<number | null>(null);
   const animTimeoutIdRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isAnimatingRef = useRef<boolean>(false);
   const hasAnimatedIntroRef = useRef<boolean>(false);
   const handleMapPinClickRef = useRef<(mm: PlottedMember) => void>(() => { });
 
   const mapboxToken = getMapboxToken();
+
+  // Window Type & Responsive Layout State
+  const [windowType, setWindowType] = useState<WindowType>(() => getWindowType());
+  const windowTypeRef = useRef<WindowType>(windowType);
+  windowTypeRef.current = windowType;
+  const isNarrow = windowType === 'narrow';
+
+  useEffect(() => {
+    const handleResize = () => {
+      const nextType = getWindowType();
+      if (nextType !== windowTypeRef.current) {
+        windowTypeRef.current = nextType;
+        setWindowType(nextType);
+      }
+    };
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  const handleLayoutChanged = (layout: Layout) => {
+    mapInstanceRef.current?.resize();
+    if (layout && layout['map-panel'] && layout['sidebar-panel']) {
+      try {
+        safeSetLocalStorageItem(`fitnessqual_panel_layout_${windowTypeRef.current}`, JSON.stringify(layout));
+      } catch { }
+    }
+  };
+
+  // ResizeObserver for Mapbox container to resize map smoothly during panel dragging and window changes
+  useEffect(() => {
+    if (!mapContainerRef.current) return;
+    const observer = new ResizeObserver(() => {
+      mapInstanceRef.current?.resize();
+    });
+    observer.observe(mapContainerRef.current);
+    return () => {
+      observer.disconnect();
+    };
+  }, []);
 
   // Mode & Detour Settings
   const [viewMode, setViewMode] = useState<'overview' | 'suggestions'>('overview');
@@ -160,6 +240,25 @@ export const ActivityMapView: React.FC<ActivityMapViewProps> = ({
   const [unmappedMembers, setUnmappedMembers] = useState<UnmappedMember[]>([]);
   const [memberRoutes, setMemberRoutes] = useState<Record<number, DrivingRouteResult>>({});
   const [isMapReady, setIsMapReady] = useState<boolean>(false);
+  const [previousOpMemberIds, setPreviousOpMemberIds] = useState<Set<number>>(new Set());
+
+  // Pre-load immediate previous day's responding personnel (multi-op or matching incident prefix)
+  useEffect(() => {
+    let isCancelled = false;
+    const contextIdStr = localStorage.getItem('d4h_context_id');
+    const contextId = contextIdStr ? parseInt(contextIdStr, 10) : 0;
+    if (!contextId || !activity) return;
+
+    getPreviousOpPeriodAttendees(contextId, activity, attendees).then((res) => {
+      if (!isCancelled && res.previousMemberIds.size > 0) {
+        setPreviousOpMemberIds(res.previousMemberIds);
+      }
+    });
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [activity, attendees]);
 
   // Helper to format Date to local ISO without seconds (YYYY-MM-DDTHH:mm) for Mapbox depart_at
   const formatLocalIsoTime = (date: Date): string => {
@@ -528,7 +627,16 @@ export const ActivityMapView: React.FC<ActivityMapViewProps> = ({
             actLng != null &&
             calculateDistanceMiles(mLat, mLng, actLat, actLng) > MAX_REASONABLE_DISTANCE_MILES;
 
-          if (isTooFar) {
+          const isOvernighter =
+            previousOpMemberIds.has(memberId) &&
+            actLat != null &&
+            actLng != null &&
+            isOverOneHourAwayRadial(mLat, mLng, actLat, actLng);
+
+          if (isOvernighter) {
+            console.log(`[ActivityMapView] Member #${memberId} (${name}) was on immediate previous op period and lives > 1hr away -> Overnighting.`);
+            unmapped.push({ attendeeId: att.id, memberId, name, initials, color, role, addressText: addressText || '', reason: 'Attended op yesterday', startsAt: att.startsAt, endsAt: att.endsAt, opDate });
+          } else if (isTooFar) {
             console.log(`[ActivityMapView] Member #${memberId} (${name}) GPS coords are > ${MAX_REASONABLE_DISTANCE_MILES} miles away.`);
             unmapped.push({ attendeeId: att.id, memberId, name, initials, color, role, addressText: addressText || '', reason: 'Location exceeds max distance', startsAt: att.startsAt, endsAt: att.endsAt, opDate });
           } else {
@@ -570,7 +678,15 @@ export const ActivityMapView: React.FC<ActivityMapViewProps> = ({
                 actLng != null &&
                 calculateDistanceMiles(geocode.lat, geocode.lng, actLat, actLng) > MAX_REASONABLE_DISTANCE_MILES;
 
-              if (isTooFar) {
+              const isOvernighter =
+                previousOpMemberIds.has(item.memberId) &&
+                actLat != null &&
+                actLng != null &&
+                isOverOneHourAwayRadial(geocode.lat, geocode.lng, actLat, actLng);
+
+              if (isOvernighter) {
+                unmapped.push({ attendeeId: item.att.id, memberId: item.memberId, name: item.name, initials: item.initials, color: item.color, role: item.role, addressText: item.addressText, reason: 'Attended op yesterday', startsAt: item.att.startsAt, endsAt: item.att.endsAt, opDate: item.opDate });
+              } else if (isTooFar) {
                 unmapped.push({ attendeeId: item.att.id, memberId: item.memberId, name: item.name, initials: item.initials, color: item.color, role: item.role, addressText: item.addressText, reason: 'Location exceeds max distance', startsAt: item.att.startsAt, endsAt: item.att.endsAt, opDate: item.opDate });
               } else {
                 plotted.push({
@@ -618,7 +734,7 @@ export const ActivityMapView: React.FC<ActivityMapViewProps> = ({
     return () => {
       isCancelled = true;
     };
-  }, [activeAttendees, members, memberMap, actLat, actLng, mapboxToken]);
+  }, [activeAttendees, members, memberMap, actLat, actLng, mapboxToken, previousOpMemberIds]);
 
   // 2. Fetch driving routes & compute carpools in a unified pipeline
   const [suggestedCarpools, setSuggestedCarpools] = useState<CarpoolGroup[]>([]);
@@ -759,32 +875,71 @@ export const ActivityMapView: React.FC<ActivityMapViewProps> = ({
         if (!driverRoute) continue;
 
         const driverDirectDist = calculateDistanceMiles(driver.lat, driver.lng, actLat!, actLng!);
+        if (driverDirectDist < 0.5) continue; // Already at incident location
+
+        const driverBearing = calculateBearing(driver.lat, driver.lng, actLat!, actLng!);
 
         // Find candidate pickups along forward corridor for the same operational date
         const candidates = availableMembers
           .filter((other) => {
             if (other.memberId === driver.memberId || assignedIds.has(other.memberId)) return false;
             if (driver.opDate && other.opDate && driver.opDate !== other.opDate) return false;
+            return true;
+          })
+          .map((other) => {
             const otherToIncident = calculateDistanceMiles(other.lat, other.lng, actLat!, actLng!);
             const driverToOther = calculateDistanceMiles(driver.lat, driver.lng, other.lat, other.lng);
-            return otherToIncident <= driverDirectDist * 1.05 && driverToOther <= 60;
+            const detourRatio = (driverToOther + otherToIncident) / driverDirectDist;
+            const detourDelta = Math.max(0, driverToOther + otherToIncident - driverDirectDist);
+
+            const candidateBearing = calculateBearing(driver.lat, driver.lng, other.lat, other.lng);
+            const bearingDiff = calculateBearingDiff(driverBearing, candidateBearing);
+            const crossTrack = Math.abs(Math.sin(driverToOther / 3958.8) * Math.sin((bearingDiff * Math.PI) / 180)) * 3958.8;
+
+            return { other, otherToIncident, driverToOther, detourRatio, detourDelta, bearingDiff, crossTrack };
+          })
+          .filter(({ otherToIncident, driverToOther, detourRatio, bearingDiff, crossTrack }) => {
+            // Candidate cannot be significantly further from incident than driver
+            if (otherToIncident > driverDirectDist * 1.05) return false;
+
+            // Immediate neighbors within 5 miles are always strong candidates
+            if (driverToOther <= 5.0) return true;
+
+            // Beyond 5 miles, candidate must be within pickup range
+            if (driverToOther > Math.min(50, driverDirectDist * 0.95)) return false;
+
+            // Straight-line detour ratio check: (D->C + C->Dest) / (D->Dest) <= 1.35
+            if (detourRatio > 1.35) return false;
+
+            // Angular corridor within 55 degrees & cross-track corridor within 15 miles
+            return bearingDiff <= 55 && crossTrack <= 15.0;
           })
           .sort((a, b) => {
-            const distA = calculateDistanceMiles(a.lat, a.lng, actLat!, actLng!);
-            const distB = calculateDistanceMiles(b.lat, b.lng, actLat!, actLng!);
-            return distB - distA;
-          });
+            // Rank candidates by straight-line detour delta (closest to driver's natural route first)
+            if (Math.abs(a.detourDelta - b.detourDelta) > 0.5) {
+              return a.detourDelta - b.detourDelta;
+            }
+            // Tie-break: distance from driver
+            return a.driverToOther - b.driverToOther;
+          })
+          .map((item) => item.other);
 
         if (candidates.length === 0) continue;
 
-        const acceptedPassengers: PlottedMember[] = [];
+        let acceptedPassengers: PlottedMember[] = [];
         let bestMultiRoute: MultiStopDrivingRouteResult | null = null;
         let bestDetourMins = 0;
 
         for (const candidate of candidates) {
           if (acceptedPassengers.length >= vehicleCapacity - 1) break;
 
-          const testPassengers = [...acceptedPassengers, candidate];
+          // Monotonically order passenger pickups along the forward route from furthest to closest to destination
+          const testPassengers = [...acceptedPassengers, candidate].sort((a, b) => {
+            const distA = calculateDistanceMiles(a.lat, a.lng, actLat!, actLng!);
+            const distB = calculateDistanceMiles(b.lat, b.lng, actLat!, actLng!);
+            return distB - distA;
+          });
+
           const stops = [
             { lng: driver.lng, lat: driver.lat },
             ...testPassengers.map((p) => ({ lng: p.lng, lat: p.lat })),
@@ -803,13 +958,14 @@ export const ActivityMapView: React.FC<ActivityMapViewProps> = ({
             setIsCalculatingCarpools(true);
           }
 
+          // Use skipStorage: true for exploratory trial candidate evaluations to prevent storage churn
           const [driverDirectAtDep, multiRoute] = await Promise.all([
             getDrivingRoute(
               { lng: driver.lng, lat: driver.lat },
               { lng: actLng!, lat: actLat! },
               { ...driverDepOpts, customToken: mapboxToken }
             ),
-            getMultiStopDrivingRoute(stops, { ...driverDepOpts, customToken: mapboxToken }),
+            getMultiStopDrivingRoute(stops, { ...driverDepOpts, customToken: mapboxToken, skipStorage: true }),
           ]);
 
           if (!multiRoute) continue;
@@ -818,7 +974,7 @@ export const ActivityMapView: React.FC<ActivityMapViewProps> = ({
           const detourMins = Math.max(0, Math.round((multiRoute.durationSeconds - directSec) / 60));
 
           if (detourMins <= maxDetourMinutes) {
-            acceptedPassengers.push(candidate);
+            acceptedPassengers = testPassengers;
             bestMultiRoute = multiRoute;
             bestDetourMins = detourMins;
           }
@@ -827,6 +983,15 @@ export const ActivityMapView: React.FC<ActivityMapViewProps> = ({
         if (acceptedPassengers.length > 0 && bestMultiRoute) {
           assignedIds.add(driver.memberId);
           acceptedPassengers.forEach((p) => assignedIds.add(p.memberId));
+
+          // Persist the accepted final carpool route into persistent storage
+          const finalStops = [
+            { lng: driver.lng, lat: driver.lat },
+            ...acceptedPassengers.map((p) => ({ lng: p.lng, lat: p.lat })),
+            { lng: actLng!, lat: actLat! },
+          ];
+          const driverDepOpts = getRouteOptionsForDeparture(driverRoute.durationSeconds);
+          getMultiStopDrivingRoute(finalStops, { ...driverDepOpts, customToken: mapboxToken, skipStorage: false }).catch(() => { });
 
           suggestions.push({
             id: `suggested_${driver.memberId}`,
@@ -885,7 +1050,7 @@ export const ActivityMapView: React.FC<ActivityMapViewProps> = ({
 
   // 4. Initialize Mapbox GL Map
   useEffect(() => {
-    if (!mapContainerRef.current) return;
+    if (!mapContainerEl) return;
 
     if (mapInstanceRef.current) {
       mapInstanceRef.current.remove();
@@ -908,7 +1073,7 @@ export const ActivityMapView: React.FC<ActivityMapViewProps> = ({
 
     try {
       const map = new mapboxgl.Map({
-        container: mapContainerRef.current,
+        container: mapContainerEl,
         style: 'mapbox://styles/calsar-angelolu/cm7r41ta300gy01smfom8euhj',
         center: initialCenter,
         zoom: 12,
@@ -1031,6 +1196,7 @@ export const ActivityMapView: React.FC<ActivityMapViewProps> = ({
         if (!map.getSource('driving-route')) {
           map.addSource('driving-route', {
             type: 'geojson',
+            lineMetrics: true,
             data: {
               type: 'FeatureCollection',
               features: [],
@@ -1091,7 +1257,7 @@ export const ActivityMapView: React.FC<ActivityMapViewProps> = ({
         mapInstanceRef.current = null;
       }
     };
-  }, [actLat, actLng, activityName, locationText, plottedMembers, mapboxToken]);
+  }, [mapContainerEl, actLat, actLng, activityName, locationText, plottedMembers, mapboxToken]);
 
   // Ensure Mapbox canvas resizes seamlessly when toggling viewMode
   useEffect(() => {
@@ -1237,6 +1403,9 @@ export const ActivityMapView: React.FC<ActivityMapViewProps> = ({
     const map = mapInstanceRef.current;
     if (!map || !isMapReady) return;
 
+    // Do not overwrite or clear route data while intro or replay animation is running
+    if (isAnimatingRef.current) return;
+
     const source = map.getSource('driving-route') as mapboxgl.GeoJSONSource | undefined;
     if (!source) return;
 
@@ -1290,9 +1459,11 @@ export const ActivityMapView: React.FC<ActivityMapViewProps> = ({
     });
 
     if (map.getLayer('driving-route-line')) {
+      map.setPaintProperty('driving-route-line', 'line-trim-offset', [0, 0]);
       map.setPaintProperty('driving-route-line', 'line-opacity', 0.95);
     }
     if (map.getLayer('driving-route-casing')) {
+      map.setPaintProperty('driving-route-casing', 'line-trim-offset', [0, 0]);
       map.setPaintProperty('driving-route-casing', 'line-opacity', 0.75);
     }
 
@@ -1302,7 +1473,7 @@ export const ActivityMapView: React.FC<ActivityMapViewProps> = ({
     });
   }, [selectedMemberIds, selectedCarpoolIds, plottedMembers, memberRoutes, allCarpools, isMapReady, actLat, actLng]);
 
-  // 7. Route Animation Helper (Animates all solo routes + single multi-stop routes per carpool)
+  // 7. Route Animation Helper (Animates all solo routes + single multi-stop routes per carpool via GPU line-trim-offset)
   const playIntroAnimation = (delayMs = 0, shouldFitBounds = false) => {
     if (!isMapReady || plottedMembers.length === 0 || !mapInstanceRef.current) return;
 
@@ -1337,6 +1508,7 @@ export const ActivityMapView: React.FC<ActivityMapViewProps> = ({
     if (allRoutePaths.length === 0) return;
 
     cancelAnimation();
+    isAnimatingRef.current = true;
     setSelectedMemberIds([]);
     setSelectedCarpoolIds([]);
 
@@ -1344,10 +1516,31 @@ export const ActivityMapView: React.FC<ActivityMapViewProps> = ({
     const source = map.getSource('driving-route') as mapboxgl.GeoJSONSource | undefined;
     if (!source) return;
 
+    // Build static full features once for GPU upload
+    const staticFeatures: GeoJSON.Feature<GeoJSON.LineString>[] = allRoutePaths.map(({ color, coords }) => ({
+      type: 'Feature',
+      properties: {
+        color,
+      },
+      geometry: {
+        type: 'LineString',
+        coordinates: coords,
+      },
+    }));
+
+    // Upload full route data once — no re-serialization needed per frame
+    source.setData({
+      type: 'FeatureCollection',
+      features: staticFeatures,
+    });
+
+    // Start fully trimmed (invisible) and set full opacity
     if (map.getLayer('driving-route-line')) {
+      map.setPaintProperty('driving-route-line', 'line-trim-offset', [0, 1]);
       map.setPaintProperty('driving-route-line', 'line-opacity', 0.95);
     }
     if (map.getLayer('driving-route-casing')) {
+      map.setPaintProperty('driving-route-casing', 'line-trim-offset', [0, 1]);
       map.setPaintProperty('driving-route-casing', 'line-opacity', 0.75);
     }
     if (shouldFitBounds) {
@@ -1355,68 +1548,53 @@ export const ActivityMapView: React.FC<ActivityMapViewProps> = ({
     }
 
     const startAnim = () => {
-      const startTime = performance.now();
+      let startTime: number | null = null;
       const duration = 850;
 
       const animateForward = (now: number) => {
-        const elapsed = now - startTime;
-        const progress = Math.min(1, elapsed / duration);
+        if (startTime === null) startTime = now;
+        const elapsed = Math.max(0, now - startTime);
+        const progress = Math.max(0, Math.min(1, elapsed / duration));
         const easeProgress = 1 - Math.pow(1 - progress, 3);
+        const trimStart = Math.max(0, Math.min(1, easeProgress));
 
-        const features: GeoJSON.Feature<GeoJSON.LineString>[] = allRoutePaths.map(({ color, coords }) => {
-          const sliceCount = Math.max(2, Math.floor(coords.length * easeProgress));
-          return {
-            type: 'Feature',
-            properties: {
-              color,
-            },
-            geometry: {
-              type: 'LineString',
-              coordinates: coords.slice(0, sliceCount),
-            },
-          };
-        });
-
-        source.setData({
-          type: 'FeatureCollection',
-          features,
-        });
+        // GPU shader trim update — runs directly on WebGL pipeline with 0 CPU overhead
+        if (map.getLayer('driving-route-line')) {
+          map.setPaintProperty('driving-route-line', 'line-trim-offset', [trimStart, 1]);
+        }
+        if (map.getLayer('driving-route-casing')) {
+          map.setPaintProperty('driving-route-casing', 'line-trim-offset', [trimStart, 1]);
+        }
 
         if (progress < 1) {
           animFrameIdRef.current = requestAnimationFrame(animateForward);
         } else {
+          // Complete forward draw
+          if (map.getLayer('driving-route-line')) {
+            map.setPaintProperty('driving-route-line', 'line-trim-offset', [0, 0]);
+          }
+          if (map.getLayer('driving-route-casing')) {
+            map.setPaintProperty('driving-route-casing', 'line-trim-offset', [0, 0]);
+          }
+
           animTimeoutIdRef.current = window.setTimeout(() => {
-            const retractStartTime = performance.now();
+            let retractStartTime: number | null = null;
             const retractDuration = 650;
 
             const animateRetract = (retractNow: number) => {
-              const retractElapsed = retractNow - retractStartTime;
-              const rProgress = Math.min(1, retractElapsed / retractDuration);
+              if (retractStartTime === null) retractStartTime = retractNow;
+              const retractElapsed = Math.max(0, retractNow - retractStartTime);
+              const rProgress = Math.max(0, Math.min(1, retractElapsed / retractDuration));
               const easeRetract = Math.pow(rProgress, 2.5);
+              const trimEnd = Math.max(0, Math.min(1, easeRetract));
 
-              const retractFeatures: GeoJSON.Feature<GeoJSON.LineString>[] = allRoutePaths.map(({ color, coords }) => {
-                const startIndex = Math.min(coords.length - 2, Math.floor(coords.length * easeRetract));
-                return {
-                  type: 'Feature',
-                  properties: {
-                    color,
-                  },
-                  geometry: {
-                    type: 'LineString',
-                    coordinates: coords.slice(startIndex),
-                  },
-                };
-              });
-
-              source.setData({
-                type: 'FeatureCollection',
-                features: retractFeatures,
-              });
-
+              // Retract from origin towards destination while gently fading
               if (map.getLayer('driving-route-line')) {
+                map.setPaintProperty('driving-route-line', 'line-trim-offset', [0, trimEnd]);
                 map.setPaintProperty('driving-route-line', 'line-opacity', 0.95 * (1 - rProgress));
               }
               if (map.getLayer('driving-route-casing')) {
+                map.setPaintProperty('driving-route-casing', 'line-trim-offset', [0, trimEnd]);
                 map.setPaintProperty('driving-route-casing', 'line-opacity', 0.75 * (1 - rProgress));
               }
 
@@ -1428,11 +1606,14 @@ export const ActivityMapView: React.FC<ActivityMapViewProps> = ({
                   features: [],
                 });
                 if (map.getLayer('driving-route-line')) {
+                  map.setPaintProperty('driving-route-line', 'line-trim-offset', [0, 0]);
                   map.setPaintProperty('driving-route-line', 'line-opacity', 0.95);
                 }
                 if (map.getLayer('driving-route-casing')) {
+                  map.setPaintProperty('driving-route-casing', 'line-trim-offset', [0, 0]);
                   map.setPaintProperty('driving-route-casing', 'line-opacity', 0.75);
                 }
+                isAnimatingRef.current = false;
                 if (shouldFitBounds) {
                   fitAllBounds();
                 }
@@ -1454,8 +1635,9 @@ export const ActivityMapView: React.FC<ActivityMapViewProps> = ({
     }
   };
 
-  // Helper to immediately abort any running route animation loop and restore map layer opacities
+  // Helper to immediately abort any running route animation loop and restore map layer opacities and trim
   const cancelAnimation = () => {
+    isAnimatingRef.current = false;
     if (animFrameIdRef.current) {
       cancelAnimationFrame(animFrameIdRef.current);
       animFrameIdRef.current = null;
@@ -1467,19 +1649,22 @@ export const ActivityMapView: React.FC<ActivityMapViewProps> = ({
     const map = mapInstanceRef.current;
     if (map) {
       if (map.getLayer('driving-route-line')) {
+        map.setPaintProperty('driving-route-line', 'line-trim-offset', [0, 0]);
         map.setPaintProperty('driving-route-line', 'line-opacity', 0.95);
       }
       if (map.getLayer('driving-route-casing')) {
+        map.setPaintProperty('driving-route-casing', 'line-trim-offset', [0, 0]);
         map.setPaintProperty('driving-route-casing', 'line-opacity', 0.75);
       }
     }
   };
 
-  // Initial animation trigger on first load
+  // Initial animation trigger on first load once route calculation finishes
   useEffect(() => {
     if (
       !isMapReady ||
       hasAnimatedIntroRef.current ||
+      isCalculatingRoutes ||
       plottedMembers.length === 0 ||
       !mapInstanceRef.current
     ) {
@@ -1490,17 +1675,20 @@ export const ActivityMapView: React.FC<ActivityMapViewProps> = ({
       .map((mm) => memberRoutes[mm.memberId]?.geometry?.coordinates)
       .filter((coords): coords is [number, number][] => Array.isArray(coords) && coords.length >= 2);
 
-    if (available.length === 0 || available.length < plottedMembers.length) {
+    if (available.length === 0) {
       return;
     }
 
     hasAnimatedIntroRef.current = true;
-    playIntroAnimation(1500);
+    playIntroAnimation(1200);
+  }, [isMapReady, isCalculatingRoutes, plottedMembers, memberRoutes]);
 
+  // Cleanup animations when component unmounts
+  useEffect(() => {
     return () => {
       cancelAnimation();
     };
-  }, [isMapReady, plottedMembers, memberRoutes]);
+  }, []);
 
   const clearActiveRoute = () => {
     cancelAnimation();
@@ -1520,6 +1708,16 @@ export const ActivityMapView: React.FC<ActivityMapViewProps> = ({
     fitAllBounds();
   };
 
+  // Scroll helper to bring the selected sidebar item into view
+  const scrollToSidebarItem = (elementId: string) => {
+    setTimeout(() => {
+      const el = document.getElementById(elementId);
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }
+    }, 60);
+  };
+
   // Map pin click handler: Selects carpool if member is carpooling, or selects individual route
   const handleMapPinClick = async (mm: PlottedMember) => {
     cancelAnimation();
@@ -1527,8 +1725,12 @@ export const ActivityMapView: React.FC<ActivityMapViewProps> = ({
     // Check if member is part of an active carpool
     const activeCp = memberToActiveCarpool.get(mm.memberId);
     if (activeCp) {
+      if (overviewFilter !== 'all' && overviewFilter !== 'carpool') {
+        setOverviewFilter('all');
+      }
       setSelectedMemberIds((prev) => prev.filter((id) => id !== mm.memberId));
       handleCarpoolClick(activeCp);
+      scrollToSidebarItem(`sidebar-carpool-${activeCp.id}`);
       return;
     }
 
@@ -1540,12 +1742,17 @@ export const ActivityMapView: React.FC<ActivityMapViewProps> = ({
       if (suggestedCp) {
         setSelectedMemberIds((prev) => prev.filter((id) => id !== mm.memberId));
         handleCarpoolClick(suggestedCp);
+        scrollToSidebarItem(`sidebar-suggested-carpool-${suggestedCp.id}`);
         return;
       }
     }
 
     // Solo member selection
+    if (overviewFilter !== 'all' && overviewFilter !== 'solo') {
+      setOverviewFilter('all');
+    }
     handleSoloMemberClick(mm);
+    scrollToSidebarItem(`sidebar-member-${mm.memberId}`);
   };
   handleMapPinClickRef.current = handleMapPinClick;
 
@@ -1743,10 +1950,21 @@ export const ActivityMapView: React.FC<ActivityMapViewProps> = ({
   }, [plottedMembers, unmappedMembers, activeCarpools, editingCarpoolId]);
 
   return (
-    <div className="activity-map-view animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+    <div
+      className="activity-map-view animate-fade-in"
+      style={{
+        flex: 1,
+        display: 'flex',
+        flexDirection: 'column',
+        minHeight: 0,
+        height: '100%',
+        width: '100%',
+        gap: 16,
+      }}
+    >
       {/* ── Main Map Header Toolbar ────────────────────────────── */}
       <div
-        className="card"
+        className="card activity-map-toolbar"
         style={{
           padding: '12px 18px',
           display: 'flex',
@@ -1754,11 +1972,12 @@ export const ActivityMapView: React.FC<ActivityMapViewProps> = ({
           alignItems: 'center',
           justifyContent: 'space-between',
           gap: 12,
+          flexShrink: 0,
         }}
       >
         {/* Left: Mode Switcher & Geocode Status */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-          <Compass size={18} style={{ color: 'var(--navy-7)' }} />
+          {!isNarrow && <Compass size={18} className="map-topbar-compass" style={{ color: 'var(--navy-7)' }} />}
 
           {/* Mode Switcher Toggle */}
           <div
@@ -2013,16 +2232,18 @@ export const ActivityMapView: React.FC<ActivityMapViewProps> = ({
             <span>Add Carpool</span>
           </button>
 
-          {/* Fit All Button */}
-          <button
-            onClick={fitAllBounds}
-            className="btn btn-secondary btn-sm"
-            style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontWeight: 600 }}
-            title="Fit map to all responders and incident"
-          >
-            <Maximize2 size={13} />
-            <span>Fit All</span>
-          </button>
+          {/* Fit All Button (Hidden on smaller screens) */}
+          {!isNarrow && (
+            <button
+              onClick={fitAllBounds}
+              className="btn btn-secondary btn-sm map-fit-all-btn"
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontWeight: 600 }}
+              title="Fit map to all responders and incident"
+            >
+              <Maximize2 size={13} />
+              <span>Fit All</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -2046,371 +2267,548 @@ export const ActivityMapView: React.FC<ActivityMapViewProps> = ({
         </div>
       )}
 
-      {/* ── Main Map Canvas + Side Panel ────────────────────── */}
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: '1fr minmax(320px, 390px)',
-          gap: 16,
-          height: 'calc(100vh - 240px)',
-          minHeight: 480,
-          maxHeight: 900,
-          alignItems: 'stretch',
-        }}
+      {/* ── Main Map Canvas + Side Panel (Resizable Panels) ── */}
+      <Group
+        key={windowType}
+        orientation={isNarrow ? 'vertical' : 'horizontal'}
+        defaultLayout={getPersistedLayout(windowType)}
+        onLayoutChanged={handleLayoutChanged}
+        className="activity-map-panel-group"
+        data-orientation={isNarrow ? 'vertical' : 'horizontal'}
       >
-        {/* Mapbox Map Canvas */}
-        <div
-          className="card"
-          style={{
-            position: 'relative',
-            height: '100%',
-            overflow: 'hidden',
-            padding: 0,
-            borderRadius: 12,
-            border: '1px solid var(--slate-4)',
-          }}
+        {/* Mapbox Map Canvas Panel */}
+        <Panel
+          id="map-panel"
+          minSize={isNarrow ? '25%' : '30%'}
+          defaultSize={getPersistedLayout(windowType)['map-panel']}
+          style={{ overflow: 'hidden', display: 'flex', flexDirection: 'column', height: '100%' }}
         >
-          <div ref={mapContainerRef} style={{ width: '100%', height: '100%' }} />
-
-          {/* Floating Map Legend */}
           <div
+            className="card activity-map-canvas-card"
             style={{
-              position: 'absolute',
-              bottom: 16,
-              left: 16,
-              zIndex: 10,
-              background: 'rgba(255, 255, 255, 0.95)',
-              backdropFilter: 'blur(8px)',
+              position: 'relative',
+              height: '100%',
+              width: '100%',
+              overflow: 'hidden',
+              padding: 0,
+              borderRadius: 12,
               border: '1px solid var(--slate-4)',
-              borderRadius: 8,
-              padding: '8px 12px',
-              boxShadow: '0 4px 14px rgba(6,27,68,0.12)',
               display: 'flex',
               flexDirection: 'column',
-              gap: 6,
-              fontSize: '0.75rem',
             }}
           >
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <div
-                style={{
-                  width: 14,
-                  height: 14,
-                  borderRadius: '50%',
-                  background: '#061B44',
-                  border: '2px solid #DCC394',
-                }}
-              />
-              <span style={{ fontWeight: 500, color: 'var(--slate-12)' }}>{locationText || 'Destination'}</span>
-            </div>
+            <div
+              ref={(el) => {
+                mapContainerRef.current = el;
+                setMapContainerEl(el);
+              }}
+              style={{ width: '100%', height: '100%', flex: 1 }}
+            />
 
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <div
-                style={{
-                  width: 14,
-                  height: 14,
-                  borderRadius: '50%',
-                  background: '#0d9488',
-                  border: '1px solid #ffffff',
-                  boxShadow: '0 0 0 1px rgba(0,0,0,0.2)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  fontSize: '9px',
-                  color: 'white',
-                  fontWeight: 600,
-                }}
-              >
-                M
-              </div>
-              <span style={{ fontWeight: 500, color: 'var(--slate-12)' }}>
-                Members
-              </span>
-            </div>
-          </div>
-        </div>
-
-        {/* Sidebar Panel: Overview vs Carpool Suggestions */}
-        <div
-          className="card"
-          style={{
-            padding: '16px 18px',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 12,
-            height: '100%',
-            overflowY: 'auto',
-          }}
-        >
-          {/* Destination Header (Overview only) */}
-          {viewMode === 'overview' && (
-            <div style={{ paddingBottom: 10, borderBottom: '1px solid var(--slate-3)' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <MapPin size={15} style={{ color: 'var(--slate-9)' }} />
-                <span style={{ fontWeight: 600, fontSize: '0.8125rem', color: 'var(--slate-12)' }}>
-                  Destination
-                </span>
-              </div>
-              <div style={{ marginLeft: 21, marginTop: 2 }}>
-                <div style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--slate-12)' }}>
-                  {streetAddress ? (
-                    streetAddress
-                  ) : actLat != null && actLng != null ? (
-                    <span style={{ fontFamily: 'monospace' }}>
-                      {actLat.toFixed(5)}, {actLng.toFixed(5)}
-                    </span>
-                  ) : (
-                    locationText || activityName || 'Location'
-                  )}
-                </div>
-                {!streetAddress && (activity?.address?.town || activity?.address?.street) && (
-                  <div style={{ fontSize: '0.75rem', color: 'var(--slate-9)', marginTop: 1 }}>
-                    {[activity?.address?.street, activity?.address?.town].filter(Boolean).join(', ')}
-                  </div>
-                )}
-                {!streetAddress && actLat == null && !activity?.address?.town && !activity?.address?.street && (
-                  <div style={{ fontSize: '0.75rem', color: 'var(--slate-8)' }}>
-                    No GPS coordinates available
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-
-          {/* ── MODE 1: OVERVIEW ──────────────────────────────── */}
-          {viewMode === 'overview' && (
-            <>
-              {/* Search & Filter Toolbar in Overview */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {/* Search Input Box */}
+            {/* Floating Map Legend */}
+            <div
+              style={{
+                position: 'absolute',
+                bottom: 16,
+                left: 16,
+                zIndex: 10,
+                background: 'rgba(255, 255, 255, 0.95)',
+                backdropFilter: 'blur(8px)',
+                border: '1px solid var(--slate-4)',
+                borderRadius: 8,
+                padding: '8px 12px',
+                boxShadow: '0 4px 14px rgba(6,27,68,0.12)',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 6,
+                fontSize: '0.75rem',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <div
                   style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 8,
-                    background: 'var(--slate-2)',
-                    padding: '6px 10px',
-                    borderRadius: 6,
-                    border: '1px solid var(--slate-4)',
+                    width: 14,
+                    height: 14,
+                    borderRadius: '50%',
+                    background: '#061B44',
+                    border: '2px solid #DCC394',
                   }}
-                >
-                  <Search size={14} style={{ color: 'var(--slate-9)' }} />
-                  <input
-                    type="text"
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    placeholder="Search for a member..."
-                    style={{
-                      border: 'none',
-                      background: 'transparent',
-                      fontSize: '0.8125rem',
-                      width: '100%',
-                      outline: 'none',
-                      color: 'var(--slate-12)',
-                    }}
-                  />
-                  {searchQuery && (
-                    <button
-                      onClick={() => setSearchQuery('')}
-                      style={{ border: 'none', background: 'none', cursor: 'pointer', padding: 0, color: 'var(--slate-8)' }}
-                    >
-                      <X size={13} />
-                    </button>
-                  )}
-                </div>
-
-                {/* Filter Pills */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap', marginTop: 4 }}>
-                  <button
-                    onClick={() => setOverviewFilter('all')}
-                    style={{
-                      border: 'none',
-                      background: overviewFilter === 'all' ? 'var(--navy-9)' : 'var(--slate-3)',
-                      color: overviewFilter === 'all' ? 'white' : 'var(--slate-11)',
-                      fontSize: '0.6875rem',
-                      fontWeight: 600,
-                      padding: '3px 8px',
-                      borderRadius: 12,
-                      cursor: 'pointer',
-                      transition: 'all 0.15s ease',
-                    }}
-                  >
-                    All ({activeCarpools.length + (plottedMembers.length - activeCarpoolMemberIds.size) + (unmappedMembers.length - Array.from(activeCarpoolMemberIds).filter(id => unmappedMembers.some(u => u.memberId === id)).length)})
-                  </button>
-
-                  <button
-                    onClick={() => setOverviewFilter('carpool')}
-                    style={{
-                      border: 'none',
-                      background: overviewFilter === 'carpool' ? 'var(--navy-9)' : 'var(--slate-3)',
-                      color: overviewFilter === 'carpool' ? 'white' : 'var(--slate-11)',
-                      fontSize: '0.6875rem',
-                      fontWeight: 600,
-                      padding: '3px 8px',
-                      borderRadius: 12,
-                      cursor: 'pointer',
-                      transition: 'all 0.15s ease',
-                    }}
-                  >
-                    Carpools ({activeCarpools.length})
-                  </button>
-
-                  <button
-                    onClick={() => setOverviewFilter('solo')}
-                    style={{
-                      border: 'none',
-                      background: overviewFilter === 'solo' ? 'var(--navy-9)' : 'var(--slate-3)',
-                      color: overviewFilter === 'solo' ? 'white' : 'var(--slate-11)',
-                      fontSize: '0.6875rem',
-                      fontWeight: 600,
-                      padding: '3px 8px',
-                      borderRadius: 12,
-                      cursor: 'pointer',
-                      transition: 'all 0.15s ease',
-                    }}
-                  >
-                    Solo ({plottedMembers.filter(m => !activeCarpoolMemberIds.has(m.memberId)).length})
-                  </button>
-
-                  <button
-                    onClick={() => setOverviewFilter('unmapped')}
-                    style={{
-                      border: 'none',
-                      background: overviewFilter === 'unmapped' ? 'var(--navy-9)' : 'var(--slate-3)',
-                      color: overviewFilter === 'unmapped' ? 'white' : 'var(--slate-11)',
-                      fontSize: '0.6875rem',
-                      fontWeight: 600,
-                      padding: '3px 8px',
-                      borderRadius: 12,
-                      cursor: 'pointer',
-                      transition: 'all 0.15s ease',
-                    }}
-                  >
-                    Unmapped ({unmappedMembers.filter(u => !activeCarpoolMemberIds.has(u.memberId)).length})
-                  </button>
-                </div>
+                />
+                <span style={{ fontWeight: 500, color: 'var(--slate-12)' }}>{locationText || 'Destination'}</span>
               </div>
 
-              {/* Overview Cards List */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 4 }}>
-                {isInitialLoading ? (
-                  // Progressive Skeleton Loading Placeholders
-                  Array.from({ length: Math.max(attendees.length, 3) }).map((_, idx) => (
-                    <div
-                      key={`placeholder_${idx}`}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <div
+                  style={{
+                    width: 14,
+                    height: 14,
+                    borderRadius: '50%',
+                    background: '#059669',
+                    border: '2px solid #ffffff',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: 'white',
+                    fontSize: '9px',
+                    fontWeight: 700,
+                  }}
+                >
+                  M
+                </div>
+                <span style={{ fontWeight: 500, color: 'var(--slate-12)' }}>
+                  Members
+                </span>
+              </div>
+            </div>
+          </div>
+        </Panel>
+
+        {/* Resizable Separator Handle */}
+        <Separator
+          className={`panel-resize-handle ${isNarrow ? 'panel-resize-handle-vertical' : 'panel-resize-handle-horizontal'}`}
+        >
+          <div className="handle-grip" />
+        </Separator>
+
+        {/* Sidebar Panel: Overview vs Carpool Suggestions */}
+        <Panel
+          id="sidebar-panel"
+          minSize={isNarrow ? '25%' : '260px'}
+          defaultSize={getPersistedLayout(windowType)['sidebar-panel']}
+          style={{ overflow: 'hidden', display: 'flex', flexDirection: 'column', height: '100%' }}
+        >
+          <div
+            className="card activity-map-sidebar-card"
+            style={{
+              padding: '16px 18px',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 12,
+              height: '100%',
+              width: '100%',
+              overflowY: 'auto',
+              boxSizing: 'border-box',
+            }}
+          >
+            {/* Destination Header (Overview only, hidden on narrow screens) */}
+            {viewMode === 'overview' && !isNarrow && (
+              <div className="map-sidebar-destination-header" style={{ paddingBottom: 10, borderBottom: '1px solid var(--slate-3)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <MapPin size={15} style={{ color: 'var(--slate-9)' }} />
+                  <span style={{ fontWeight: 600, fontSize: '0.8125rem', color: 'var(--slate-12)' }}>
+                    Destination
+                  </span>
+                </div>
+                <div style={{ marginLeft: 21, marginTop: 2 }}>
+                  <div style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--slate-12)' }}>
+                    {streetAddress ? (
+                      streetAddress
+                    ) : actLat != null && actLng != null ? (
+                      `${actLat.toFixed(5)}, ${actLng.toFixed(5)}`
+                    ) : (
+                      locationText || activityName || 'Location'
+                    )}
+                  </div>
+                  {!streetAddress && (activity?.address?.town || activity?.address?.street) && (
+                    <div style={{ fontSize: '0.75rem', color: 'var(--slate-9)', marginTop: 1 }}>
+                      {[activity?.address?.street, activity?.address?.town].filter(Boolean).join(', ')}
+                    </div>
+                  )}
+                  {!streetAddress && actLat == null && !activity?.address?.town && !activity?.address?.street && (
+                    <div style={{ fontSize: '0.75rem', color: 'var(--slate-8)' }}>
+                      No GPS coordinates available
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* ── MODE 1: OVERVIEW ──────────────────────────────── */}
+            {viewMode === 'overview' && (
+              <>
+                {/* Search & Filter Toolbar in Overview */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {/* Search Input Box */}
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 8,
+                      background: 'var(--slate-2)',
+                      padding: '6px 10px',
+                      borderRadius: 6,
+                      border: '1px solid var(--slate-4)',
+                    }}
+                  >
+                    <Search size={14} style={{ color: 'var(--slate-9)' }} />
+                    <input
+                      type="text"
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      placeholder="Search for a member..."
                       style={{
-                        padding: '10px 12px',
-                        borderRadius: 8,
-                        background: 'var(--slate-1)',
-                        border: '1px solid var(--slate-3)',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: 10,
+                        border: 'none',
+                        background: 'transparent',
+                        fontSize: '0.8125rem',
+                        width: '100%',
+                        outline: 'none',
+                        color: 'var(--slate-12)',
+                      }}
+                    />
+                    {searchQuery && (
+                      <button
+                        onClick={() => setSearchQuery('')}
+                        style={{ border: 'none', background: 'none', cursor: 'pointer', padding: 0, color: 'var(--slate-8)' }}
+                      >
+                        <X size={13} />
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Filter Pills */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap', marginTop: 4 }}>
+                    <button
+                      onClick={() => setOverviewFilter('all')}
+                      style={{
+                        border: 'none',
+                        background: overviewFilter === 'all' ? 'var(--navy-9)' : 'var(--slate-3)',
+                        color: overviewFilter === 'all' ? 'white' : 'var(--slate-11)',
+                        fontSize: '0.6875rem',
+                        fontWeight: 600,
+                        padding: '3px 8px',
+                        borderRadius: 12,
+                        cursor: 'pointer',
+                        transition: 'all 0.15s ease',
                       }}
                     >
-                      <div className="skeleton" style={{ width: 32, height: 32, minWidth: 32, borderRadius: '50%' }} />
-                      <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 6 }}>
-                        <div className="skeleton" style={{ width: '55%', height: 14, borderRadius: 4 }} />
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                          <div className="skeleton" style={{ width: 48, height: 11, borderRadius: 4 }} />
-                          <div className="skeleton" style={{ width: 40, height: 11, borderRadius: 4 }} />
+                      All ({activeCarpools.length + (plottedMembers.length - activeCarpoolMemberIds.size) + (unmappedMembers.length - Array.from(activeCarpoolMemberIds).filter(id => unmappedMembers.some(u => u.memberId === id)).length)})
+                    </button>
+
+                    <button
+                      onClick={() => setOverviewFilter('carpool')}
+                      style={{
+                        border: 'none',
+                        background: overviewFilter === 'carpool' ? 'var(--navy-9)' : 'var(--slate-3)',
+                        color: overviewFilter === 'carpool' ? 'white' : 'var(--slate-11)',
+                        fontSize: '0.6875rem',
+                        fontWeight: 600,
+                        padding: '3px 8px',
+                        borderRadius: 12,
+                        cursor: 'pointer',
+                        transition: 'all 0.15s ease',
+                      }}
+                    >
+                      Carpools ({activeCarpools.length})
+                    </button>
+
+                    <button
+                      onClick={() => setOverviewFilter('solo')}
+                      style={{
+                        border: 'none',
+                        background: overviewFilter === 'solo' ? 'var(--navy-9)' : 'var(--slate-3)',
+                        color: overviewFilter === 'solo' ? 'white' : 'var(--slate-11)',
+                        fontSize: '0.6875rem',
+                        fontWeight: 600,
+                        padding: '3px 8px',
+                        borderRadius: 12,
+                        cursor: 'pointer',
+                        transition: 'all 0.15s ease',
+                      }}
+                    >
+                      Solo ({plottedMembers.filter(m => !activeCarpoolMemberIds.has(m.memberId)).length})
+                    </button>
+
+                    <button
+                      onClick={() => setOverviewFilter('unmapped')}
+                      style={{
+                        border: 'none',
+                        background: overviewFilter === 'unmapped' ? 'var(--navy-9)' : 'var(--slate-3)',
+                        color: overviewFilter === 'unmapped' ? 'white' : 'var(--slate-11)',
+                        fontSize: '0.6875rem',
+                        fontWeight: 600,
+                        padding: '3px 8px',
+                        borderRadius: 12,
+                        cursor: 'pointer',
+                        transition: 'all 0.15s ease',
+                      }}
+                    >
+                      Unmapped ({unmappedMembers.filter(u => !activeCarpoolMemberIds.has(u.memberId)).length})
+                    </button>
+                  </div>
+                </div>
+
+                {/* Overview Cards List */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 4 }}>
+                  {isInitialLoading ? (
+                    // Progressive Skeleton Loading Placeholders
+                    Array.from({ length: Math.max(attendees.length, 3) }).map((_, idx) => (
+                      <div
+                        key={`placeholder_${idx}`}
+                        style={{
+                          padding: '10px 12px',
+                          borderRadius: 8,
+                          background: 'var(--slate-1)',
+                          border: '1px solid var(--slate-3)',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 10,
+                        }}
+                      >
+                        <div className="skeleton" style={{ width: 32, height: 32, minWidth: 32, borderRadius: '50%' }} />
+                        <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                          <div className="skeleton" style={{ width: '55%', height: 14, borderRadius: 4 }} />
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <div className="skeleton" style={{ width: 48, height: 11, borderRadius: 4 }} />
+                            <div className="skeleton" style={{ width: 40, height: 11, borderRadius: 4 }} />
+                          </div>
                         </div>
                       </div>
+                    ))
+                  ) : filteredOverviewItems.totalCount === 0 ? (
+                    <div style={{ fontSize: '0.8125rem', color: 'var(--slate-8)', padding: '16px 0', textAlign: 'center' }}>
+                      No matching members found
                     </div>
-                  ))
-                ) : filteredOverviewItems.totalCount === 0 ? (
-                  <div style={{ fontSize: '0.8125rem', color: 'var(--slate-8)', padding: '16px 0', textAlign: 'center' }}>
-                    No matching members found
-                  </div>
-                ) : (
-                  <>
-                    {/* 1. Melded Carpool Cards */}
-                    {filteredOverviewItems.carpools.map((cp, cpIdx) => {
-                      const isSelected = selectedCarpoolIds.includes(cp.id);
-                      const hasAnySelection = selectedMemberIds.length > 0 || selectedCarpoolIds.length > 0;
-                      const isDimmed = hasAnySelection && !isSelected;
-                      const driver = plottedMembers.find((m) => m.memberId === cp.driverId);
-                      const plottedPassengers = cp.passengerIds
-                        .map((id) => plottedMembers.find((m) => m.memberId === id))
-                        .filter((m): m is PlottedMember => !!m);
-                      const unmappedPassengers = cp.passengerIds
-                        .map((id) => unmappedMembers.find((u) => u.memberId === id))
-                        .filter((u): u is UnmappedMember => !!u);
+                  ) : (
+                    <>
+                      {/* 1. Melded Carpool Cards */}
+                      {filteredOverviewItems.carpools.map((cp, cpIdx) => {
+                        const isSelected = selectedCarpoolIds.includes(cp.id);
+                        const hasAnySelection = selectedMemberIds.length > 0 || selectedCarpoolIds.length > 0;
+                        const isDimmed = hasAnySelection && !isSelected;
+                        const driver = plottedMembers.find((m) => m.memberId === cp.driverId);
+                        const plottedPassengers = cp.passengerIds
+                          .map((id) => plottedMembers.find((m) => m.memberId === id))
+                          .filter((m): m is PlottedMember => !!m);
+                        const unmappedPassengers = cp.passengerIds
+                          .map((id) => unmappedMembers.find((u) => u.memberId === id))
+                          .filter((u): u is UnmappedMember => !!u);
 
-                      const allPassengers = [...plottedPassengers, ...unmappedPassengers];
-                      const allNames = [driver?.name || cp.name, ...allPassengers.map((p) => p.name)].join(', ');
-                      const hasUnmapped = unmappedPassengers.length > 0;
-                      const detourText = hasUnmapped ? `${cp.detourMinutes}m+ detour` : `${cp.detourMinutes}m detour`;
-                      const isCalculating = isCalculatingRoutes || isCalculatingCarpools || (!cp.multiStopRoute && !memberRoutes[cp.driverId] && mapboxToken && actLat != null && actLng != null);
+                        const allPassengers = [...plottedPassengers, ...unmappedPassengers];
+                        const allNames = [driver?.name || cp.name, ...allPassengers.map((p) => p.name)].join(', ');
+                        const hasUnmapped = unmappedPassengers.length > 0;
+                        const detourText = hasUnmapped ? `${cp.detourMinutes}m+ detour` : `${cp.detourMinutes}m detour`;
+                        const isCalculating = isCalculatingRoutes || isCalculatingCarpools || (!cp.multiStopRoute && !memberRoutes[cp.driverId] && mapboxToken && actLat != null && actLng != null);
 
-                      return (
-                        <div
-                          key={cp.id}
-                          onClick={() => handleCarpoolClick(cp)}
-                          style={{
-                            padding: '10px 12px',
-                            borderRadius: 8,
-                            background: isSelected ? 'var(--navy-1)' : 'var(--slate-1)',
-                            border: isSelected ? `2px solid ${cp.color}` : '1px solid var(--slate-3)',
-                            opacity: isDimmed ? 0.45 : 1,
-                            filter: isDimmed ? 'grayscale(20%)' : 'none',
-                            cursor: 'pointer',
-                            transition: 'all 0.2s ease',
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: 10,
-                          }}
-                          className="hover-card-item"
-                        >
-                          {/* Left: Avatar Stack with Passenger Icons Peeping at the Bottom */}
+                        return (
                           <div
+                            key={cp.id}
+                            id={`sidebar-carpool-${cp.id}`}
+                            onClick={() => handleCarpoolClick(cp)}
                             style={{
-                              position: 'relative',
-                              width: 32,
-                              minWidth: 32,
-                              height: Math.max(34, 32 + allPassengers.length * 8),
-                              marginTop: 2,
+                              padding: '10px 12px',
+                              borderRadius: 8,
+                              background: isSelected ? 'var(--navy-1)' : 'var(--slate-1)',
+                              border: isSelected ? `2px solid ${cp.color}` : '1px solid var(--slate-3)',
+                              opacity: isDimmed ? 0.45 : 1,
+                              filter: isDimmed ? 'grayscale(20%)' : 'none',
+                              cursor: 'pointer',
+                              transition: 'all 0.2s ease',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: 10,
                             }}
+                            className="hover-card-item"
                           >
-                            {/* Passenger Avatars peeping below */}
-                            {allPassengers.map((passenger, pIdx) => (
+                            {/* Left: Avatar Stack with Passenger Icons Peeping at the Bottom */}
+                            <div
+                              style={{
+                                position: 'relative',
+                                width: 32,
+                                minWidth: 32,
+                                height: Math.max(34, 32 + allPassengers.length * 8),
+                                marginTop: 2,
+                              }}
+                            >
+                              {/* Passenger Avatars peeping below */}
+                              {allPassengers.map((passenger, pIdx) => (
+                                <div
+                                  key={passenger.memberId}
+                                  style={{
+                                    position: 'absolute',
+                                    top: 10 + (pIdx + 1) * 8,
+                                    left: 2,
+                                    width: 28,
+                                    height: 28,
+                                    borderRadius: '50%',
+                                    background: passenger.color,
+                                    color: '#ffffff',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    fontWeight: 600,
+                                    fontSize: '9px',
+                                    letterSpacing: '-0.02em',
+                                    border: '2px solid #ffffff',
+                                    boxShadow: '0 2px 4px rgba(0,0,0,0.15)',
+                                    zIndex: Math.max(1, 8 - pIdx),
+                                  }}
+                                  title={`Passenger: ${passenger.name}`}
+                                >
+                                  {passenger.initials}
+                                </div>
+                              ))}
+
+                              {/* Driver Avatar on Top */}
                               <div
-                                key={passenger.memberId}
                                 style={{
                                   position: 'absolute',
-                                  top: 10 + (pIdx + 1) * 8,
-                                  left: 2,
-                                  width: 28,
-                                  height: 28,
+                                  top: 0,
+                                  left: 0,
+                                  width: 32,
+                                  height: 32,
                                   borderRadius: '50%',
-                                  background: passenger.color,
+                                  background: cp.color,
                                   color: '#ffffff',
                                   display: 'flex',
                                   alignItems: 'center',
                                   justifyContent: 'center',
                                   fontWeight: 600,
-                                  fontSize: '9px',
+                                  fontSize: '11px',
                                   letterSpacing: '-0.02em',
                                   border: '2px solid #ffffff',
-                                  boxShadow: '0 2px 4px rgba(0,0,0,0.15)',
-                                  zIndex: Math.max(1, 8 - pIdx),
+                                  boxShadow: isSelected
+                                    ? `0 0 0 2px #061B44, 0 3px 8px rgba(0,0,0,0.3)`
+                                    : '0 2px 6px rgba(0,0,0,0.15)',
+                                  zIndex: 10,
                                 }}
-                                title={`Passenger: ${passenger.name}`}
+                                title={`Driver: ${driver?.name || 'Driver'}`}
                               >
-                                {passenger.initials}
+                                {driver?.initials || 'DR'}
                               </div>
-                            ))}
+                            </div>
 
-                            {/* Driver Avatar on Top */}
+                            {/* Middle: Content (Comma-Separated Names Title & Route Stats) */}
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              {/* Title: Driver Name, Passenger 1, Passenger 2, ... */}
+                              <span style={{ fontWeight: 600, fontSize: '0.875rem', color: 'var(--slate-12)', display: 'block', lineHeight: 1.35 }}>
+                                {allNames}
+                              </span>
+
+                              {/* Travel Time, Distance & Detour (with skeleton shimmer while calculating) */}
+                              {isCalculating ? (
+                                <div style={{ marginTop: 4, display: 'flex', alignItems: 'center', gap: 6 }}>
+                                  <div className="skeleton" style={{ width: 52, height: 13, borderRadius: 4 }} />
+                                  <div className="skeleton" style={{ width: 44, height: 13, borderRadius: 4 }} />
+                                  <div className="skeleton" style={{ width: 58, height: 16, borderRadius: 4 }} />
+                                </div>
+                              ) : (
+                                <div style={{ fontSize: '0.8125rem', marginTop: 3, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                                  {isMultiPeriod && (driver?.startsAt || activity?.startsAt || (activity as any)?.startDate) && (
+                                    <span style={{ fontWeight: 400, color: 'var(--slate-10)', fontSize: '0.75rem' }}>
+                                      Arrives {format(new Date(driver?.startsAt || activity?.startsAt || (activity as any)?.startDate), 'MM/dd')} ·
+                                    </span>
+                                  )}
+                                  <span style={{ fontWeight: 600, color: 'var(--slate-12)' }}>
+                                    {cp.durationFormatted}
+                                  </span>
+                                  <span style={{ fontWeight: 400, color: 'var(--slate-10)', fontSize: '0.75rem' }}>
+                                    ({cp.distanceFormatted})
+                                  </span>
+                                  <span
+                                    style={{
+                                      fontSize: '0.6875rem',
+                                      fontWeight: 600,
+                                      background: cp.detourMinutes <= 20 ? 'var(--teal-2)' : 'var(--gold-2)',
+                                      color: cp.detourMinutes <= 20 ? 'var(--teal-9)' : 'var(--gold-9)',
+                                      padding: '1px 5px',
+                                      borderRadius: 4,
+                                    }}
+                                  >
+                                    {detourText}
+                                  </span>
+                                </div>
+                              )}
+                            </div>
+
+                            {/* Right: Vertical Column (Navigation Arrow, Edit, Trash) */}
+                            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, minWidth: 20 }}>
+                              <Navigation
+                                size={14}
+                                style={{
+                                  color: isSelected ? cp.color : 'var(--slate-8)',
+                                  transform: isSelected ? 'rotate(45deg)' : 'none',
+                                  transition: 'transform 0.2s ease, color 0.2s ease',
+                                }}
+                              />
+
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleOpenModifyCarpool(cp);
+                                }}
+                                style={{
+                                  border: 'none',
+                                  background: 'none',
+                                  color: 'var(--slate-9)',
+                                  cursor: 'pointer',
+                                  padding: '2px',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                }}
+                                title="Edit carpool members"
+                              >
+                                <Edit2 size={12} />
+                              </button>
+
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleDeleteCarpool(cp, cpIdx);
+                                }}
+                                style={{
+                                  border: 'none',
+                                  background: 'none',
+                                  color: 'var(--slate-8)',
+                                  cursor: 'pointer',
+                                  padding: '2px',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                }}
+                                title="Delete carpool"
+                              >
+                                <Trash2 size={12} />
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+
+                      {/* 2. Solo Plotted Responders */}
+                      {filteredOverviewItems.solo.map((mm) => {
+                        const route = memberRoutes[mm.memberId];
+                        const isSelected = selectedMemberIds.includes(mm.memberId);
+                        const hasAnySelection = selectedMemberIds.length > 0 || selectedCarpoolIds.length > 0;
+                        const isDimmed = hasAnySelection && !isSelected;
+
+                        return (
+                          <div
+                            key={mm.memberId}
+                            id={`sidebar-member-${mm.memberId}`}
+                            onClick={() => handleSoloMemberClick(mm)}
+                            style={{
+                              padding: '10px 12px',
+                              borderRadius: 8,
+                              background: isSelected ? 'var(--navy-1)' : 'var(--slate-1)',
+                              border: isSelected ? `2px solid ${mm.color}` : '1px solid var(--slate-3)',
+                              opacity: isDimmed ? 0.45 : 1,
+                              filter: isDimmed ? 'grayscale(20%)' : 'none',
+                              cursor: 'pointer',
+                              transition: 'all 0.2s ease',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: 10,
+                            }}
+                            className="hover-card-item"
+                          >
                             <div
                               style={{
-                                position: 'absolute',
-                                top: 0,
-                                left: 0,
                                 width: 32,
                                 height: 32,
+                                minWidth: 32,
                                 borderRadius: '50%',
-                                background: cp.color,
+                                background: mm.color,
                                 color: '#ffffff',
                                 display: 'flex',
                                 alignItems: 'center',
@@ -2418,233 +2816,283 @@ export const ActivityMapView: React.FC<ActivityMapViewProps> = ({
                                 fontWeight: 600,
                                 fontSize: '11px',
                                 letterSpacing: '-0.02em',
-                                border: '2px solid #ffffff',
-                                boxShadow: isSelected
-                                  ? `0 0 0 2px #061B44, 0 3px 8px rgba(0,0,0,0.3)`
-                                  : '0 2px 6px rgba(0,0,0,0.15)',
-                                zIndex: 10,
+                                boxShadow: isSelected ? `0 0 0 2px #061B44, 0 3px 8px rgba(0,0,0,0.3)` : '0 2px 6px rgba(0,0,0,0.15)',
+                                transition: 'box-shadow 0.2s ease',
                               }}
-                              title={`Driver: ${driver?.name || 'Driver'}`}
                             >
-                              {driver?.initials || 'DR'}
+                              {mm.initials}
                             </div>
-                          </div>
 
-                          {/* Middle: Content (Comma-Separated Names Title & Route Stats) */}
-                          <div style={{ flex: 1, minWidth: 0 }}>
-                            {/* Title: Driver Name, Passenger 1, Passenger 2, ... */}
-                            <span style={{ fontWeight: 600, fontSize: '0.875rem', color: 'var(--slate-12)', display: 'block', lineHeight: 1.35 }}>
-                              {allNames}
-                            </span>
-
-                            {/* Travel Time, Distance & Detour (with skeleton shimmer while calculating) */}
-                            {isCalculating ? (
-                              <div style={{ marginTop: 4, display: 'flex', alignItems: 'center', gap: 6 }}>
-                                <div className="skeleton" style={{ width: 52, height: 13, borderRadius: 4 }} />
-                                <div className="skeleton" style={{ width: 44, height: 13, borderRadius: 4 }} />
-                                <div className="skeleton" style={{ width: 58, height: 16, borderRadius: 4 }} />
-                              </div>
-                            ) : (
-                              <div style={{ fontSize: '0.8125rem', marginTop: 3, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                                {isMultiPeriod && (driver?.startsAt || activity?.startsAt || (activity as any)?.startDate) && (
-                                  <span style={{ fontWeight: 400, color: 'var(--slate-10)', fontSize: '0.75rem' }}>
-                                    Arrives {format(new Date(driver?.startsAt || activity?.startsAt || (activity as any)?.startDate), 'MM/dd')} ·
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                                {!mm.name || mm.name === 'Responding Member' ? (
+                                  <div className="skeleton" style={{ width: '55%', height: 16, borderRadius: 4, marginBottom: 2 }} />
+                                ) : (
+                                  <span style={{ fontWeight: 600, fontSize: '0.875rem', color: 'var(--slate-12)' }}>
+                                    {mm.name}
                                   </span>
                                 )}
-                                <span style={{ fontWeight: 600, color: 'var(--slate-12)' }}>
-                                  {cp.durationFormatted}
-                                </span>
-                                <span style={{ fontWeight: 400, color: 'var(--slate-10)', fontSize: '0.75rem' }}>
-                                  ({cp.distanceFormatted})
-                                </span>
-                                <span
+                                <Navigation
+                                  size={13}
                                   style={{
-                                    fontSize: '0.6875rem',
-                                    fontWeight: 600,
-                                    background: cp.detourMinutes <= 20 ? 'var(--teal-2)' : 'var(--gold-2)',
-                                    color: cp.detourMinutes <= 20 ? 'var(--teal-9)' : 'var(--gold-9)',
-                                    padding: '1px 5px',
-                                    borderRadius: 4,
+                                    color: isSelected ? mm.color : 'var(--slate-8)',
+                                    transform: isSelected ? 'rotate(45deg)' : 'none',
+                                    transition: 'transform 0.2s ease, color 0.2s ease',
                                   }}
-                                >
-                                  {detourText}
-                                </span>
+                                />
                               </div>
-                            )}
+
+                              {route && !isCalculatingRoutes ? (
+                                <div style={{ fontSize: '0.8125rem', marginTop: 2, display: 'flex', alignItems: 'baseline', gap: 6, flexWrap: 'wrap' }}>
+                                  {isMultiPeriod && (mm.startsAt || activity?.startsAt || (activity as any)?.startDate) && (
+                                    <span style={{ fontWeight: 400, color: 'var(--slate-10)', fontSize: '0.75rem' }}>
+                                      Arrives {format(new Date(mm.startsAt || activity?.startsAt || (activity as any)?.startDate), 'MM/dd')} ·
+                                    </span>
+                                  )}
+                                  <span style={{ fontWeight: 600, color: 'var(--slate-12)' }}>
+                                    {route.durationFormatted}
+                                  </span>
+                                  <span style={{ fontWeight: 400, color: 'var(--slate-10)', fontSize: '0.75rem' }}>
+                                    ({route.distanceFormatted})
+                                  </span>
+                                </div>
+                              ) : isCalculatingRoutes || (!route && mapboxToken && actLat != null && actLng != null) ? (
+                                <div style={{ marginTop: 4, display: 'flex', alignItems: 'center', gap: 5 }}>
+                                  <div className="skeleton" style={{ width: 52, height: 13, borderRadius: 4 }} />
+                                  <div className="skeleton" style={{ width: 44, height: 13, borderRadius: 4 }} />
+                                </div>
+                              ) : null}
+                            </div>
                           </div>
+                        );
+                      })}
 
-                          {/* Right: Vertical Column (Navigation Arrow, Edit, Trash) */}
-                          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, minWidth: 20 }}>
-                            <Navigation
-                              size={14}
-                              style={{
-                                color: isSelected ? cp.color : 'var(--slate-8)',
-                                transform: isSelected ? 'rotate(45deg)' : 'none',
-                                transition: 'transform 0.2s ease, color 0.2s ease',
-                              }}
-                            />
+                      {/* 3. Unmapped Responders (No known coordinates) */}
+                      {filteredOverviewItems.unmapped.map((um) => {
+                        const hasAnySelection = selectedMemberIds.length > 0 || selectedCarpoolIds.length > 0;
 
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleOpenModifyCarpool(cp);
-                              }}
-                              style={{
-                                border: 'none',
-                                background: 'none',
-                                color: 'var(--slate-9)',
-                                cursor: 'pointer',
-                                padding: '2px',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                              }}
-                              title="Edit carpool members"
-                            >
-                              <Edit2 size={12} />
-                            </button>
-
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleDeleteCarpool(cp, cpIdx);
-                              }}
-                              style={{
-                                border: 'none',
-                                background: 'none',
-                                color: 'var(--slate-8)',
-                                cursor: 'pointer',
-                                padding: '2px',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                              }}
-                              title="Delete carpool"
-                            >
-                              <Trash2 size={12} />
-                            </button>
-                          </div>
-                        </div>
-                      );
-                    })}
-
-                    {/* 2. Solo Plotted Responders */}
-                    {filteredOverviewItems.solo.map((mm) => {
-                      const route = memberRoutes[mm.memberId];
-                      const isSelected = selectedMemberIds.includes(mm.memberId);
-                      const hasAnySelection = selectedMemberIds.length > 0 || selectedCarpoolIds.length > 0;
-                      const isDimmed = hasAnySelection && !isSelected;
-
-                      return (
-                        <div
-                          key={mm.memberId}
-                          onClick={() => handleSoloMemberClick(mm)}
-                          style={{
-                            padding: '10px 12px',
-                            borderRadius: 8,
-                            background: isSelected ? 'var(--navy-1)' : 'var(--slate-1)',
-                            border: isSelected ? `2px solid ${mm.color}` : '1px solid var(--slate-3)',
-                            opacity: isDimmed ? 0.45 : 1,
-                            filter: isDimmed ? 'grayscale(20%)' : 'none',
-                            cursor: 'pointer',
-                            transition: 'all 0.2s ease',
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: 10,
-                          }}
-                          className="hover-card-item"
-                        >
+                        return (
                           <div
+                            key={um.memberId}
+                            id={`sidebar-unmapped-member-${um.memberId}`}
                             style={{
-                              width: 32,
-                              height: 32,
-                              minWidth: 32,
-                              borderRadius: '50%',
-                              background: mm.color,
-                              color: '#ffffff',
+                              padding: '10px 12px',
+                              borderRadius: 8,
+                              background: 'var(--slate-1)',
+                              border: '1px solid var(--slate-3)',
+                              opacity: hasAnySelection ? 0.45 : 1,
+                              filter: hasAnySelection ? 'grayscale(20%)' : 'none',
                               display: 'flex',
                               alignItems: 'center',
-                              justifyContent: 'center',
-                              fontWeight: 600,
-                              fontSize: '11px',
-                              letterSpacing: '-0.02em',
-                              boxShadow: isSelected ? `0 0 0 2px #061B44, 0 3px 8px rgba(0,0,0,0.3)` : '0 2px 6px rgba(0,0,0,0.15)',
-                              transition: 'box-shadow 0.2s ease',
+                              gap: 10,
                             }}
                           >
-                            {mm.initials}
-                          </div>
+                            <div
+                              style={{
+                                width: 32,
+                                height: 32,
+                                minWidth: 32,
+                                borderRadius: '50%',
+                                background: um.color,
+                                color: '#ffffff',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                fontWeight: 600,
+                                fontSize: '11px',
+                                letterSpacing: '-0.02em',
+                                boxShadow: '0 2px 6px rgba(0,0,0,0.15)',
+                              }}
+                            >
+                              {um.initials}
+                            </div>
 
-                          <div style={{ flex: 1, minWidth: 0 }}>
-                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                              {!mm.name || mm.name === 'Responding Member' ? (
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              {!um.name || um.name === 'Responding Member' ? (
                                 <div className="skeleton" style={{ width: '55%', height: 16, borderRadius: 4, marginBottom: 2 }} />
                               ) : (
-                                <span style={{ fontWeight: 600, fontSize: '0.875rem', color: 'var(--slate-12)' }}>
-                                  {mm.name}
+                                <span style={{ fontWeight: 600, fontSize: '0.875rem', color: 'var(--slate-12)', display: 'block' }}>
+                                  {um.name}
                                 </span>
                               )}
-                              <Navigation
-                                size={13}
-                                style={{
-                                  color: isSelected ? mm.color : 'var(--slate-8)',
-                                  transform: isSelected ? 'rotate(45deg)' : 'none',
-                                  transition: 'transform 0.2s ease, color 0.2s ease',
-                                }}
-                              />
-                            </div>
-
-                            {route && !isCalculatingRoutes ? (
-                              <div style={{ fontSize: '0.8125rem', marginTop: 2, display: 'flex', alignItems: 'baseline', gap: 6, flexWrap: 'wrap' }}>
-                                {isMultiPeriod && (mm.startsAt || activity?.startsAt || (activity as any)?.startDate) && (
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2, flexWrap: 'wrap' }}>
+                                {isMultiPeriod && (um.startsAt || activity?.startsAt || (activity as any)?.startDate) && (
                                   <span style={{ fontWeight: 400, color: 'var(--slate-10)', fontSize: '0.75rem' }}>
-                                    Arrives {format(new Date(mm.startsAt || activity?.startsAt || (activity as any)?.startDate), 'MM/dd')} ·
+                                    Arrives {format(new Date(um.startsAt || activity?.startsAt || (activity as any)?.startDate), 'MM/dd')} ·
                                   </span>
                                 )}
-                                <span style={{ fontWeight: 600, color: 'var(--slate-12)' }}>
-                                  {route.durationFormatted}
-                                </span>
-                                <span style={{ fontWeight: 400, color: 'var(--slate-10)', fontSize: '0.75rem' }}>
-                                  ({route.distanceFormatted})
+                                <span style={{ fontSize: '0.75rem', color: 'var(--slate-9)' }}>
+                                  {um.reason || 'No known location'}
                                 </span>
                               </div>
-                            ) : isCalculatingRoutes || (!route && mapboxToken && actLat != null && actLng != null) ? (
-                              <div style={{ marginTop: 4, display: 'flex', alignItems: 'center', gap: 5 }}>
-                                <div className="skeleton" style={{ width: 52, height: 13, borderRadius: 4 }} />
-                                <div className="skeleton" style={{ width: 44, height: 13, borderRadius: 4 }} />
-                              </div>
-                            ) : null}
+                            </div>
                           </div>
-                        </div>
-                      );
-                    })}
+                        );
+                      })}
+                    </>
+                  )}
+                </div>
+              </>
+            )}
 
-                    {/* 3. Unmapped Responders (No known coordinates) */}
-                    {filteredOverviewItems.unmapped.map((um) => {
-                      const hasAnySelection = selectedMemberIds.length > 0 || selectedCarpoolIds.length > 0;
+            {/* ── MODE 2: CARPOOL SUGGESTIONS ────────────────────── */}
+            {viewMode === 'suggestions' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid var(--slate-3)', paddingBottom: 6 }}>
+                  <span style={{ fontSize: '0.8125rem', fontWeight: 600, color: 'var(--slate-12)' }}>
+                    Suggestions ({suggestedCarpools.length})
+                  </span>
+                </div>
 
-                      return (
+                {/* Tuning Parameters */}
+                <div
+                  style={{
+                    padding: '8px 10px',
+                    background: 'var(--slate-1)',
+                    border: '1px solid var(--slate-3)',
+                    borderRadius: 8,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 6,
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <span style={{ fontSize: '0.75rem', fontWeight: 500, color: 'var(--slate-11)' }}>
+                      Max Detour Threshold:
+                    </span>
+                    <select
+                      value={maxDetourMinutes}
+                      onChange={(e) => setMaxDetourMinutes(Number(e.target.value))}
+                      style={{
+                        background: 'white',
+                        border: '1px solid var(--slate-4)',
+                        borderRadius: 6,
+                        padding: '2px 6px',
+                        fontSize: '0.75rem',
+                        fontWeight: 600,
+                        color: 'var(--slate-12)',
+                      }}
+                    >
+                      <option value={15}>15 mins</option>
+                      <option value={30}>30 mins</option>
+                      <option value={45}>45 mins</option>
+                      <option value={60}>60 mins</option>
+                      <option value={90}>90 mins</option>
+                    </select>
+                  </div>
+
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <span style={{ fontSize: '0.75rem', fontWeight: 500, color: 'var(--slate-11)' }}>
+                      Vehicle Capacity:
+                    </span>
+                    <select
+                      value={vehicleCapacity}
+                      onChange={(e) => setVehicleCapacity(Number(e.target.value))}
+                      style={{
+                        background: 'white',
+                        border: '1px solid var(--slate-4)',
+                        borderRadius: 6,
+                        padding: '2px 6px',
+                        fontSize: '0.75rem',
+                        fontWeight: 600,
+                        color: 'var(--slate-12)',
+                      }}
+                    >
+                      <option value={2}>2 seats</option>
+                      <option value={3}>3 seats</option>
+                      <option value={4}>4 seats</option>
+                      <option value={5}>5 seats</option>
+                      <option value={7}>7 seats</option>
+                    </select>
+                  </div>
+                </div>
+
+                {suggestedCarpools.length === 0 && (
+                  <div style={{ fontSize: '0.75rem', color: 'var(--slate-8)', padding: '12px 0', textAlign: 'center' }}>
+                    No suggested carpools for remaining unassigned members.
+                  </div>
+                )}
+
+                {suggestedCarpools.map((cp) => {
+                  const isSelected = selectedCarpoolIds.includes(cp.id);
+                  const driver = plottedMembers.find((m) => m.memberId === cp.driverId);
+                  const passengers = cp.passengerIds
+                    .map((id) => plottedMembers.find((m) => m.memberId === id))
+                    .filter((m): m is PlottedMember => !!m);
+
+                  const allNames = [driver?.name || cp.name, ...passengers.map((p) => p.name)].join(', ');
+                  const hasUnmapped = cp.passengerIds.some((id) => unmappedMembers.some((u) => u.memberId === id));
+                  const detourText = hasUnmapped ? `${cp.detourMinutes}m+ detour` : `${cp.detourMinutes}m detour`;
+                  const isCalculating = isCalculatingCarpools || isCalculatingRoutes;
+
+                  return (
+                    <div
+                      key={cp.id}
+                      id={`sidebar-suggested-carpool-${cp.id}`}
+                      onClick={() => handleCarpoolClick(cp)}
+                      style={{
+                        padding: '10px 12px',
+                        borderRadius: 8,
+                        background: isSelected ? 'var(--navy-1)' : 'var(--slate-1)',
+                        border: isSelected ? `2px solid ${cp.color}` : '1px solid var(--slate-3)',
+                        cursor: 'pointer',
+                        transition: 'all 0.2s ease',
+                        display: 'flex',
+                        flexDirection: 'column',
+                      }}
+                      className="hover-card-item"
+                    >
+                      {/* Top Row: Avatar Stack + Content + Navigation Arrow */}
+                      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+                        {/* Left: Avatar Stack with Passenger Icons Peeping at the Bottom */}
                         <div
-                          key={um.memberId}
                           style={{
-                            padding: '10px 12px',
-                            borderRadius: 8,
-                            background: 'var(--slate-1)',
-                            border: '1px solid var(--slate-3)',
-                            opacity: hasAnySelection ? 0.45 : 1,
-                            filter: hasAnySelection ? 'grayscale(20%)' : 'none',
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: 10,
+                            position: 'relative',
+                            width: 32,
+                            minWidth: 32,
+                            height: Math.max(34, 32 + passengers.length * 8),
+                            marginTop: 2,
                           }}
                         >
+                          {/* Passenger Avatars peeping below */}
+                          {passengers.map((passenger, pIdx) => (
+                            <div
+                              key={passenger.memberId}
+                              style={{
+                                position: 'absolute',
+                                top: 10 + (pIdx + 1) * 8,
+                                left: 2,
+                                width: 28,
+                                height: 28,
+                                borderRadius: '50%',
+                                background: passenger.color,
+                                color: '#ffffff',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                fontWeight: 600,
+                                fontSize: '9px',
+                                letterSpacing: '-0.02em',
+                                border: '2px solid #ffffff',
+                                boxShadow: '0 2px 4px rgba(0,0,0,0.15)',
+                                zIndex: Math.max(1, 8 - pIdx),
+                              }}
+                              title={`Passenger: ${passenger.name}`}
+                            >
+                              {passenger.initials}
+                            </div>
+                          ))}
+
+                          {/* Driver Avatar on Top */}
                           <div
                             style={{
+                              position: 'absolute',
+                              top: 0,
+                              left: 0,
                               width: 32,
                               height: 32,
-                              minWidth: 32,
                               borderRadius: '50%',
-                              background: um.color,
+                              background: cp.color,
                               color: '#ffffff',
                               display: 'flex',
                               alignItems: 'center',
@@ -2652,332 +3100,135 @@ export const ActivityMapView: React.FC<ActivityMapViewProps> = ({
                               fontWeight: 600,
                               fontSize: '11px',
                               letterSpacing: '-0.02em',
-                              boxShadow: '0 2px 6px rgba(0,0,0,0.15)',
+                              border: '2px solid #ffffff',
+                              boxShadow: isSelected
+                                ? `0 0 0 2px #061B44, 0 3px 8px rgba(0,0,0,0.3)`
+                                : '0 2px 6px rgba(0,0,0,0.15)',
+                              zIndex: 10,
                             }}
+                            title={`Driver: ${driver?.name || 'Driver'}`}
                           >
-                            {um.initials}
+                            {driver?.initials || 'DR'}
                           </div>
+                        </div>
 
-                          <div style={{ flex: 1, minWidth: 0 }}>
-                            {!um.name || um.name === 'Responding Member' ? (
-                              <div className="skeleton" style={{ width: '55%', height: 16, borderRadius: 4, marginBottom: 2 }} />
-                            ) : (
-                              <span style={{ fontWeight: 600, fontSize: '0.875rem', color: 'var(--slate-12)', display: 'block' }}>
-                                {um.name}
+                        {/* Middle: Content */}
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <span style={{ fontWeight: 600, fontSize: '0.875rem', color: 'var(--slate-12)', display: 'block', lineHeight: 1.35 }}>
+                            {allNames}
+                          </span>
+
+                          {/* Travel Time, Distance & Detour (with skeleton shimmer while calculating) */}
+                          {isCalculating ? (
+                            <div style={{ marginTop: 4, display: 'flex', alignItems: 'center', gap: 6 }}>
+                              <div className="skeleton" style={{ width: 52, height: 13, borderRadius: 4 }} />
+                              <div className="skeleton" style={{ width: 44, height: 13, borderRadius: 4 }} />
+                              <div className="skeleton" style={{ width: 58, height: 16, borderRadius: 4 }} />
+                            </div>
+                          ) : (
+                            <div style={{ fontSize: '0.8125rem', marginTop: 3, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                              <span style={{ fontWeight: 600, color: 'var(--slate-12)' }}>
+                                {cp.durationFormatted}
                               </span>
-                            )}
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2, flexWrap: 'wrap' }}>
-                              {isMultiPeriod && (um.startsAt || activity?.startsAt || (activity as any)?.startDate) && (
-                                <span style={{ fontWeight: 400, color: 'var(--slate-10)', fontSize: '0.75rem' }}>
-                                  Arrives {format(new Date(um.startsAt || activity?.startsAt || (activity as any)?.startDate), 'MM/dd')} ·
-                                </span>
-                              )}
-                              <span style={{ fontSize: '0.75rem', color: 'var(--slate-9)' }}>
-                                {um.reason || 'No known location'}
+                              <span style={{ fontWeight: 400, color: 'var(--slate-10)', fontSize: '0.75rem' }}>
+                                ({cp.distanceFormatted})
+                              </span>
+                              <span
+                                style={{
+                                  fontSize: '0.6875rem',
+                                  fontWeight: 600,
+                                  background: cp.detourMinutes <= 20 ? 'var(--teal-2)' : 'var(--gold-2)',
+                                  color: cp.detourMinutes <= 20 ? 'var(--teal-9)' : 'var(--gold-9)',
+                                  padding: '1px 5px',
+                                  borderRadius: 4,
+                                }}
+                              >
+                                {detourText}
                               </span>
                             </div>
-                          </div>
+                          )}
                         </div>
-                      );
-                    })}
-                  </>
-                )}
-              </div>
-            </>
-          )}
 
-          {/* ── MODE 2: CARPOOL SUGGESTIONS ────────────────────── */}
-          {viewMode === 'suggestions' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid var(--slate-3)', paddingBottom: 6 }}>
-                <span style={{ fontSize: '0.8125rem', fontWeight: 600, color: 'var(--slate-12)' }}>
-                  Suggestions ({suggestedCarpools.length})
-                </span>
-              </div>
-
-              {/* Tuning Parameters */}
-              <div
-                style={{
-                  padding: '8px 10px',
-                  background: 'var(--slate-1)',
-                  border: '1px solid var(--slate-3)',
-                  borderRadius: 8,
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: 6,
-                }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                  <span style={{ fontSize: '0.75rem', fontWeight: 500, color: 'var(--slate-11)' }}>
-                    Max Detour Threshold:
-                  </span>
-                  <select
-                    value={maxDetourMinutes}
-                    onChange={(e) => setMaxDetourMinutes(Number(e.target.value))}
-                    style={{
-                      background: 'white',
-                      border: '1px solid var(--slate-4)',
-                      borderRadius: 6,
-                      padding: '2px 6px',
-                      fontSize: '0.75rem',
-                      fontWeight: 600,
-                      color: 'var(--slate-12)',
-                    }}
-                  >
-                    <option value={15}>15 mins</option>
-                    <option value={30}>30 mins</option>
-                    <option value={45}>45 mins</option>
-                    <option value={60}>60 mins</option>
-                    <option value={90}>90 mins</option>
-                  </select>
-                </div>
-
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                  <span style={{ fontSize: '0.75rem', fontWeight: 500, color: 'var(--slate-11)' }}>
-                    Vehicle Capacity:
-                  </span>
-                  <select
-                    value={vehicleCapacity}
-                    onChange={(e) => setVehicleCapacity(Number(e.target.value))}
-                    style={{
-                      background: 'white',
-                      border: '1px solid var(--slate-4)',
-                      borderRadius: 6,
-                      padding: '2px 6px',
-                      fontSize: '0.75rem',
-                      fontWeight: 600,
-                      color: 'var(--slate-12)',
-                    }}
-                  >
-                    <option value={2}>2 seats</option>
-                    <option value={3}>3 seats</option>
-                    <option value={4}>4 seats</option>
-                    <option value={5}>5 seats</option>
-                    <option value={7}>7 seats</option>
-                  </select>
-                </div>
-              </div>
-
-              {suggestedCarpools.length === 0 && (
-                <div style={{ fontSize: '0.75rem', color: 'var(--slate-8)', padding: '12px 0', textAlign: 'center' }}>
-                  No suggested carpools for remaining unassigned members.
-                </div>
-              )}
-
-              {suggestedCarpools.map((cp) => {
-                const isSelected = selectedCarpoolIds.includes(cp.id);
-                const driver = plottedMembers.find((m) => m.memberId === cp.driverId);
-                const passengers = cp.passengerIds
-                  .map((id) => plottedMembers.find((m) => m.memberId === id))
-                  .filter((m): m is PlottedMember => !!m);
-
-                const allNames = [driver?.name || cp.name, ...passengers.map((p) => p.name)].join(', ');
-                const hasUnmapped = cp.passengerIds.some((id) => unmappedMembers.some((u) => u.memberId === id));
-                const detourText = hasUnmapped ? `${cp.detourMinutes}m+ detour` : `${cp.detourMinutes}m detour`;
-                const isCalculating = isCalculatingCarpools || isCalculatingRoutes;
-
-                return (
-                  <div
-                    key={cp.id}
-                    onClick={() => handleCarpoolClick(cp)}
-                    style={{
-                      padding: '10px 12px',
-                      borderRadius: 8,
-                      background: isSelected ? 'var(--navy-1)' : 'var(--slate-1)',
-                      border: isSelected ? `2px solid ${cp.color}` : '1px solid var(--slate-3)',
-                      cursor: 'pointer',
-                      transition: 'all 0.2s ease',
-                      display: 'flex',
-                      flexDirection: 'column',
-                    }}
-                    className="hover-card-item"
-                  >
-                    {/* Top Row: Avatar Stack + Content + Navigation Arrow */}
-                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
-                      {/* Left: Avatar Stack with Passenger Icons Peeping at the Bottom */}
-                      <div
-                        style={{
-                          position: 'relative',
-                          width: 32,
-                          minWidth: 32,
-                          height: Math.max(34, 32 + passengers.length * 8),
-                          marginTop: 2,
-                        }}
-                      >
-                        {/* Passenger Avatars peeping below */}
-                        {passengers.map((passenger, pIdx) => (
-                          <div
-                            key={passenger.memberId}
+                        {/* Right: Selection Navigation Arrow */}
+                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', minWidth: 20 }}>
+                          <Navigation
+                            size={14}
                             style={{
-                              position: 'absolute',
-                              top: 10 + (pIdx + 1) * 8,
-                              left: 2,
-                              width: 28,
-                              height: 28,
-                              borderRadius: '50%',
-                              background: passenger.color,
-                              color: '#ffffff',
-                              display: 'flex',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              fontWeight: 600,
-                              fontSize: '9px',
-                              letterSpacing: '-0.02em',
-                              border: '2px solid #ffffff',
-                              boxShadow: '0 2px 4px rgba(0,0,0,0.15)',
-                              zIndex: Math.max(1, 8 - pIdx),
+                              color: isSelected ? cp.color : 'var(--slate-8)',
+                              transform: isSelected ? 'rotate(45deg)' : 'none',
+                              transition: 'transform 0.2s ease, color 0.2s ease',
                             }}
-                            title={`Passenger: ${passenger.name}`}
-                          >
-                            {passenger.initials}
-                          </div>
-                        ))}
+                          />
+                        </div>
+                      </div>
 
-                        {/* Driver Avatar on Top */}
+                      {/* Expanded Bottom Action Row (Only shown when suggestion is selected) */}
+                      {isSelected && (
                         <div
                           style={{
-                            position: 'absolute',
-                            top: 0,
-                            left: 0,
-                            width: 32,
-                            height: 32,
-                            borderRadius: '50%',
-                            background: cp.color,
-                            color: '#ffffff',
                             display: 'flex',
                             alignItems: 'center',
-                            justifyContent: 'center',
-                            fontWeight: 600,
-                            fontSize: '11px',
-                            letterSpacing: '-0.02em',
-                            border: '2px solid #ffffff',
-                            boxShadow: isSelected
-                              ? `0 0 0 2px #061B44, 0 3px 8px rgba(0,0,0,0.3)`
-                              : '0 2px 6px rgba(0,0,0,0.15)',
-                            zIndex: 10,
+                            justifyContent: 'flex-end',
+                            gap: 6,
+                            marginTop: 8,
+                            paddingTop: 8,
+                            borderTop: '1px solid var(--slate-3)',
                           }}
-                          title={`Driver: ${driver?.name || 'Driver'}`}
                         >
-                          {driver?.initials || 'DR'}
+                          {/* Edit Button: Icon only */}
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleOpenModifyCarpool(cp);
+                            }}
+                            className="btn btn-secondary btn-sm"
+                            style={{
+                              fontSize: '0.75rem',
+                              padding: '3px 8px',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              height: 26,
+                            }}
+                            title="Modify carpool suggestion"
+                          >
+                            <Edit2 size={12} />
+                          </button>
+
+                          {/* Accept Button: Icon and Text */}
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleAcceptCarpool(cp);
+                            }}
+                            className="btn btn-primary btn-sm"
+                            style={{
+                              fontSize: '0.75rem',
+                              padding: '3px 10px',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 5,
+                              background: 'var(--teal-9)',
+                              borderColor: 'var(--teal-9)',
+                              color: '#ffffff',
+                              height: 26,
+                              fontWeight: 600,
+                            }}
+                            title="Accept suggestion into overview carpools"
+                          >
+                            <Check size={12} strokeWidth={2.5} />
+                            <span>Accept</span>
+                          </button>
                         </div>
-                      </div>
-
-                      {/* Middle: Content */}
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <span style={{ fontWeight: 600, fontSize: '0.875rem', color: 'var(--slate-12)', display: 'block', lineHeight: 1.35 }}>
-                          {allNames}
-                        </span>
-
-                        {/* Travel Time, Distance & Detour (with skeleton shimmer while calculating) */}
-                        {isCalculating ? (
-                          <div style={{ marginTop: 4, display: 'flex', alignItems: 'center', gap: 6 }}>
-                            <div className="skeleton" style={{ width: 52, height: 13, borderRadius: 4 }} />
-                            <div className="skeleton" style={{ width: 44, height: 13, borderRadius: 4 }} />
-                            <div className="skeleton" style={{ width: 58, height: 16, borderRadius: 4 }} />
-                          </div>
-                        ) : (
-                          <div style={{ fontSize: '0.8125rem', marginTop: 3, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                            <span style={{ fontWeight: 600, color: 'var(--slate-12)' }}>
-                              {cp.durationFormatted}
-                            </span>
-                            <span style={{ fontWeight: 400, color: 'var(--slate-10)', fontSize: '0.75rem' }}>
-                              ({cp.distanceFormatted})
-                            </span>
-                            <span
-                              style={{
-                                fontSize: '0.6875rem',
-                                fontWeight: 600,
-                                background: cp.detourMinutes <= 20 ? 'var(--teal-2)' : 'var(--gold-2)',
-                                color: cp.detourMinutes <= 20 ? 'var(--teal-9)' : 'var(--gold-9)',
-                                padding: '1px 5px',
-                                borderRadius: 4,
-                              }}
-                            >
-                              {detourText}
-                            </span>
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Right: Selection Navigation Arrow */}
-                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', minWidth: 20 }}>
-                        <Navigation
-                          size={14}
-                          style={{
-                            color: isSelected ? cp.color : 'var(--slate-8)',
-                            transform: isSelected ? 'rotate(45deg)' : 'none',
-                            transition: 'transform 0.2s ease, color 0.2s ease',
-                          }}
-                        />
-                      </div>
+                      )}
                     </div>
-
-                    {/* Expanded Bottom Action Row (Only shown when suggestion is selected) */}
-                    {isSelected && (
-                      <div
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'flex-end',
-                          gap: 6,
-                          marginTop: 8,
-                          paddingTop: 8,
-                          borderTop: '1px solid var(--slate-3)',
-                        }}
-                      >
-                        {/* Edit Button: Icon only */}
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleOpenModifyCarpool(cp);
-                          }}
-                          className="btn btn-secondary btn-sm"
-                          style={{
-                            fontSize: '0.75rem',
-                            padding: '3px 8px',
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            height: 26,
-                          }}
-                          title="Modify carpool suggestion"
-                        >
-                          <Edit2 size={12} />
-                        </button>
-
-                        {/* Accept Button: Icon and Text */}
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleAcceptCarpool(cp);
-                          }}
-                          className="btn btn-primary btn-sm"
-                          style={{
-                            fontSize: '0.75rem',
-                            padding: '3px 10px',
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: 5,
-                            background: 'var(--teal-9)',
-                            borderColor: 'var(--teal-9)',
-                            color: '#ffffff',
-                            height: 26,
-                            fontWeight: 600,
-                          }}
-                          title="Accept suggestion into overview carpools"
-                        >
-                          <Check size={12} strokeWidth={2.5} />
-                          <span>Accept</span>
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-      </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </Panel>
+      </Group>
 
       {/* ── Add / Modify Carpool Modal ────────────────────── */}
       {isCreatingCarpool && (

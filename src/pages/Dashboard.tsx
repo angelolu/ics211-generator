@@ -210,7 +210,7 @@ export function Dashboard() {
       <div className="app-bg" style={{ minHeight: '100vh' }}>
         {/* ── Header ───────────────────────────────────────── */}
         <header className="app-header">
-          <div style={{ maxWidth: 1100, margin: '0 auto', padding: '0 24px', height: 60, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div style={{ maxWidth: 1200, margin: '0 auto', padding: '0 24px', height: 60, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
               <div style={{
                 width: 34, height: 34, borderRadius: 9,
@@ -347,7 +347,7 @@ export function Dashboard() {
         </header>
 
         {/* ── Main ─────────────────────────────────────────── */}
-        <main className="dashboard-main" style={{ maxWidth: 1100, margin: '0 auto', padding: '20px 24px 32px' }}>
+        <main className="dashboard-main" style={{ maxWidth: 1200, margin: '0 auto', padding: '20px 24px 32px' }}>
 
           {/* Page title + filter bar */}
           <div className="dashboard-controls" style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 16 }}>

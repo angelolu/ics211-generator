@@ -22,6 +22,7 @@ const PROTECTED_KEY_PREFIXES = [
   'd4h_member_name',
   'd4h_active_view_',
   'd4h_highlight_changes',
+  'fitnessqual_panel_layout_',
 ];
 
 export function isProtectedStorageKey(key: string): boolean {

@@ -314,10 +314,18 @@
   border: 1px solid var(--amber-6);
 }
 
-.badge-success {
-  background: var(--teal-2);
-  color: var(--teal-9);
-  border: 1px solid var(--teal-3);
+.badge-success,
+.badge-operational {
+  background: #dcfce7;
+  color: #15803d;
+  border: 1px solid #bbf7d0;
+}
+
+.badge-nonoperational,
+.badge-danger {
+  background: var(--red-3);
+  color: var(--red-11);
+  border: 1px solid var(--red-6);
 }
 
 .badge-gold {
@@ -723,6 +731,12 @@
   border: none !important;
 }
 
+.member-tile:hover {
+  border-color: var(--navy-5) !important;
+  background: var(--slate-2) !important;
+  box-shadow: 0 2px 8px rgba(6, 27, 68, 0.07);
+}
+
 /* ── Print ────────────────────────────────────────────── */
 @media print {
   .no-print {
@@ -818,3 +832,174 @@
     border-radius: 10px !important;
   }
 }
+
+/* ── Activity Info View Responsive Split Layout ─────── */
+.activity-info-split-container {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  width: 100%;
+}
+
+@media (min-width: 900px) {
+  .activity-info-split-container {
+    flex-direction: row;
+    align-items: flex-start;
+  }
+
+  .activity-info-desc-col {
+    flex: 2 1 0%;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+
+  .activity-info-meta-col {
+    flex: 1 1 0%;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+}
+
+@media (max-width: 899px) {
+  .activity-info-desc-col {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    order: 2;
+  }
+
+  .activity-info-meta-col {
+    width: 100%;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: 20px;
+    order: 1;
+  }
+
+  .map-fit-all-btn {
+    display: none !important;
+  }
+
+  .map-sidebar-destination-header {
+    display: none !important;
+  }
+
+  .map-topbar-compass {
+    display: none !important;
+  }
+
+  .app-bg.map-view-active {
+    padding-bottom: 8px !important;
+  }
+
+  .app-bg.map-view-active main {
+    padding: 8px 8px 0 !important;
+  }
+
+  .app-bg.map-view-active .activity-map-view {
+    gap: 8px !important;
+  }
+
+  .app-bg.map-view-active .activity-map-toolbar {
+    padding: 8px 12px !important;
+  }
+
+  .app-bg.map-view-active .activity-map-sidebar-card {
+    padding: 10px 12px !important;
+  }
+
+  .app-bg.map-view-active .activity-map-canvas-card {
+    padding: 0 !important;
+  }
+}
+
+.app-bg.map-view-active {
+  padding-bottom: 16px;
+}
+
+/* ── Resizable Panels & Separator Styling ──────────────────── */
+.activity-map-panel-group {
+  display: flex !important;
+  width: 100%;
+  flex: 1;
+  height: 100% !important;
+  min-height: 0 !important;
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.panel-resize-handle {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  user-select: none;
+  touch-action: none;
+  background: transparent;
+  outline: none;
+  transition: all 0.15s ease;
+  z-index: 10;
+  flex-shrink: 0;
+}
+
+.panel-resize-handle:focus-visible {
+  outline: none;
+}
+
+.panel-resize-handle:focus-visible .handle-grip {
+  background: var(--navy-8);
+  box-shadow: 0 0 0 2px var(--navy-6);
+}
+
+/* Horizontal Separator (between side-by-side panels) */
+.panel-resize-handle-horizontal {
+  width: 12px;
+  cursor: col-resize;
+  margin: 0 -2px;
+  padding: 0 4px;
+}
+
+.panel-resize-handle-horizontal .handle-grip {
+  width: 4px;
+  height: 28px;
+  border-radius: 4px;
+  background: var(--slate-6);
+  transition: background-color 0.15s ease, transform 0.15s ease;
+}
+
+.panel-resize-handle-horizontal:hover .handle-grip,
+.panel-resize-handle-horizontal[data-active="true"] .handle-grip,
+.panel-resize-handle-horizontal:active .handle-grip {
+  background: var(--navy-8);
+  transform: scaleY(1.2);
+}
+
+/* Vertical Separator (between stacked panels) */
+.panel-resize-handle-vertical {
+  height: 12px;
+  cursor: row-resize;
+  margin: -2px 0;
+  padding: 4px 0;
+  width: 100%;
+}
+
+.panel-resize-handle-vertical .handle-grip {
+  width: 28px;
+  height: 4px;
+  border-radius: 4px;
+  background: var(--slate-6);
+  transition: background-color 0.15s ease, transform 0.15s ease;
+}
+
+.panel-resize-handle-vertical:hover .handle-grip,
+.panel-resize-handle-vertical[data-active="true"] .handle-grip,
+.panel-resize-handle-vertical:active .handle-grip {
+  background: var(--navy-8);
+  transform: scaleX(1.2);
+}
+

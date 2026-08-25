@@ -51,6 +51,9 @@ const TILE_STYLE: React.CSSProperties = {
   gap: 8,
   minHeight: 102,
   boxSizing: 'border-box',
+  flex: '1 1 130px',
+  minWidth: 0,
+  transition: 'all 0.2s cubic-bezier(0.16, 1, 0.3, 1)',
 };
 const TILE_LABEL_ROW: React.CSSProperties = {
   display: 'flex',
@@ -121,9 +124,23 @@ export const ActivityWeatherConditions: React.FC<ActivityWeatherConditionsProps>
     return <Sun size={14} style={{ color: '#ea580c' }} />;
   };
 
+  // Helper to check if a status badge/message is shown
+  const hasStatusBadge = (status?: string) => {
+    return !!status && status !== 'normal' && status !== 'calm' && status !== 'dry' && status !== 'low';
+  };
+
+  const getWeatherTileStyle = (status?: string, delayMs = 0): React.CSSProperties => {
+    const hasBadge = hasStatusBadge(status);
+    return {
+      ...TILE_STYLE,
+      flex: hasBadge ? '1.25 1 160px' : '1 1 130px',
+      animation: `weatherEntrance 0.35s cubic-bezier(0.16, 1, 0.3, 1) ${delayMs}ms both`,
+    };
+  };
+
   // Status badge styling helper
   const getStatusBadge = (_type: 'temp' | 'wind' | 'precip', status?: string) => {
-    if (!status || status === 'normal' || status === 'calm' || status === 'dry' || status === 'low') {
+    if (!hasStatusBadge(status)) {
       return null;
     }
 
@@ -159,7 +176,7 @@ export const ActivityWeatherConditions: React.FC<ActivityWeatherConditionsProps>
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
       {/* ── Active NWS Alerts Banner ────────────────────────── */}
       {weather?.alerts && weather.alerts.length > 0 && (
         <div
@@ -171,6 +188,7 @@ export const ActivityWeatherConditions: React.FC<ActivityWeatherConditionsProps>
             display: 'flex',
             alignItems: 'flex-start',
             gap: 10,
+            animation: 'weatherEntrance 0.35s cubic-bezier(0.16, 1, 0.3, 1) both',
           }}
         >
           <ShieldAlert size={18} style={{ color: '#e11d48', flexShrink: 0, marginTop: 1 }} />
@@ -204,11 +222,11 @@ export const ActivityWeatherConditions: React.FC<ActivityWeatherConditionsProps>
         </div>
       )}
 
-      {/* ── Always-visible date/duration row ────────────────── */}
+      {/* ── Unified Tiles Flex Container (Wraps & Resizes Together) ── */}
       <div
         style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))',
+          display: 'flex',
+          flexWrap: 'wrap',
           gap: 10,
         }}
       >
@@ -261,29 +279,13 @@ export const ActivityWeatherConditions: React.FC<ActivityWeatherConditionsProps>
             </div>
           </div>
         </div>
-      </div>
 
-      {/* ── Weather tiles — only rendered when forecast is available ── */}
-      {weather && (
-        <div
-          style={{
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 12,
-            animation: 'weatherEntrance 0.35s cubic-bezier(0.16, 1, 0.3, 1) both',
-          }}
-        >
-          {/* ── Google Weather-Style Android Grid Tiles ─────────── */}
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))',
-              gap: 10,
-            }}
-          >
+        {/* ── Weather tiles (flow and wrap together with baseline tiles) ── */}
+        {weather && (
+          <>
             {/* Tile: Temperature Range */}
-            <div style={TILE_STYLE}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <div style={getWeatherTileStyle(weather.safetyInsights.tempStatus, 0)}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6 }}>
                 <div style={TILE_LABEL_ROW}>
                   <Thermometer size={14} style={{ color: '#ea580c' }} />
                   <span>Temp</span>
@@ -304,8 +306,8 @@ export const ActivityWeatherConditions: React.FC<ActivityWeatherConditionsProps>
             </div>
 
             {/* Tile: Wind & Gusts */}
-            <div style={TILE_STYLE}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <div style={getWeatherTileStyle(weather.safetyInsights.windStatus, 40)}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6 }}>
                 <div style={TILE_LABEL_ROW}>
                   <Wind size={14} style={{ color: '#0284c7' }} />
                   <span>Wind</span>
@@ -324,8 +326,8 @@ export const ActivityWeatherConditions: React.FC<ActivityWeatherConditionsProps>
             </div>
 
             {/* Tile: Precipitation & Conditions */}
-            <div style={TILE_STYLE}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <div style={getWeatherTileStyle(weather.safetyInsights.precipStatus, 80)}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6 }}>
                 <div style={TILE_LABEL_ROW}>
                   {getWeatherIcon(weather.primaryCondition)}
                   <span>Precip</span>
@@ -352,13 +354,22 @@ export const ActivityWeatherConditions: React.FC<ActivityWeatherConditionsProps>
                 </div>
               </div>
             </div>
-          </div>
+          </>
+        )}
+      </div>
 
-          {/* ── Forecast validity footer ──────────────────────────── */}
-          <div style={{ fontSize: '0.6875rem', color: 'var(--slate-8)', lineHeight: 1.4, marginTop: 2 }}>
-            NOAA NWS forecast&nbsp;·&nbsp;Incident window&nbsp;·&nbsp;
-            {formatValidityPeriod(weather.forecastStart, weather.forecastEnd)}
-          </div>
+      {/* ── Forecast validity footer ──────────────────────────── */}
+      {weather && (
+        <div
+          style={{
+            fontSize: '0.6875rem',
+            color: 'var(--slate-8)',
+            lineHeight: 1.4,
+            animation: 'weatherEntrance 0.35s cubic-bezier(0.16, 1, 0.3, 1) 120ms both',
+          }}
+        >
+          NOAA NWS forecast&nbsp;·&nbsp;Incident window&nbsp;·&nbsp;
+          {formatValidityPeriod(weather.forecastStart, weather.forecastEnd)}
         </div>
       )}
 

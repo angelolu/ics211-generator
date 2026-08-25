@@ -85,7 +85,84 @@ export function calculateDistanceMiles(
   return R * c;
 }
 
+export function calculateBearing(
+  lat1: number,
+  lon1: number,
+  lat2: number,
+  lon2: number
+): number {
+  const phi1 = (lat1 * Math.PI) / 180;
+  const phi2 = (lat2 * Math.PI) / 180;
+  const deltaLambda = ((lon2 - lon1) * Math.PI) / 180;
+
+  const y = Math.sin(deltaLambda) * Math.cos(phi2);
+  const x =
+    Math.cos(phi1) * Math.sin(phi2) -
+    Math.sin(phi1) * Math.cos(phi2) * Math.cos(deltaLambda);
+
+  const theta = Math.atan2(y, x);
+  return ((theta * 180) / Math.PI + 360) % 360;
+}
+
+export function calculateBearingDiff(b1: number, b2: number): number {
+  const diff = Math.abs(b1 - b2) % 360;
+  return diff > 180 ? 360 - diff : diff;
+}
+
+export function calculateCrossTrackDistanceMiles(
+  driverLat: number,
+  driverLng: number,
+  targetLat: number,
+  targetLng: number,
+  destLat: number,
+  destLng: number
+): number {
+  const R = 3958.8; // Earth radius in miles
+  const d13 = calculateDistanceMiles(driverLat, driverLng, targetLat, targetLng);
+  if (d13 < 0.1) return 0;
+
+  const theta13 = (calculateBearing(driverLat, driverLng, targetLat, targetLng) * Math.PI) / 180;
+  const theta12 = (calculateBearing(driverLat, driverLng, destLat, destLng) * Math.PI) / 180;
+
+  const dXt = Math.asin(Math.sin(d13 / R) * Math.sin(theta13 - theta12)) * R;
+  return Math.abs(dXt);
+}
+
+export function calculateStraightLineDetourMiles(
+  driver: { lat: number; lng: number },
+  candidate: { lat: number; lng: number },
+  dest: { lat: number; lng: number }
+): number {
+  const direct = calculateDistanceMiles(driver.lat, driver.lng, dest.lat, dest.lng);
+  const toCandidate = calculateDistanceMiles(driver.lat, driver.lng, candidate.lat, candidate.lng);
+  const fromCandidate = calculateDistanceMiles(candidate.lat, candidate.lng, dest.lat, dest.lng);
+  return Math.max(0, toCandidate + fromCandidate - direct);
+}
+
+export function calculateDetourRatio(
+  driver: { lat: number; lng: number },
+  candidate: { lat: number; lng: number },
+  dest: { lat: number; lng: number }
+): number {
+  const direct = calculateDistanceMiles(driver.lat, driver.lng, dest.lat, dest.lng);
+  if (direct < 0.5) return 1.0;
+  const toCandidate = calculateDistanceMiles(driver.lat, driver.lng, candidate.lat, candidate.lng);
+  const fromCandidate = calculateDistanceMiles(candidate.lat, candidate.lng, dest.lat, dest.lng);
+  return (toCandidate + fromCandidate) / direct;
+}
+
 export const MAX_REASONABLE_DISTANCE_MILES = 350;
+export const ONE_HOUR_DRIVE_RADIAL_DISTANCE_MILES = 45;
+
+export function isOverOneHourAwayRadial(
+  originLat: number,
+  originLng: number,
+  destLat: number,
+  destLng: number
+): boolean {
+  const directDist = calculateDistanceMiles(originLat, originLng, destLat, destLng);
+  return directDist >= ONE_HOUR_DRIVE_RADIAL_DISTANCE_MILES;
+}
 
 export const LOCATION_CACHE_TTL_MS = 365 * 24 * 60 * 60 * 1000; // Static addresses & zip codes cached indefinitely (1 year)
 export const LIVE_TRAFFIC_CACHE_TTL_MS = 15 * 60 * 1000; // 15 minutes TTL for real-time "Leave Now" live traffic
@@ -102,9 +179,19 @@ interface CacheEntry<T> {
   timestamp: number;
 }
 
-// In-memory caches to prevent duplicate simultaneous in-flight queries
+// In-memory caches to prevent duplicate simultaneous in-flight queries & memory storage
 const inFlightGeocodes = new Map<string, Promise<GeocodeResult | null>>();
 const inFlightRoutes = new Map<string, Promise<DrivingRouteResult | null>>();
+const memoryMultiStopRouteCache = new Map<string, { data: MultiStopDrivingRouteResult; timestamp: number }>();
+const MAX_MEMORY_CACHE_SIZE = 150;
+
+function setMemoryMultiStopCache(key: string, data: MultiStopDrivingRouteResult, timestamp: number) {
+  if (memoryMultiStopRouteCache.size >= MAX_MEMORY_CACHE_SIZE) {
+    const oldestKey = memoryMultiStopRouteCache.keys().next().value;
+    if (oldestKey) memoryMultiStopRouteCache.delete(oldestKey);
+  }
+  memoryMultiStopRouteCache.set(key, { data, timestamp });
+}
 
 function compactGeometry(geometry: any): any {
   if (!geometry || !Array.isArray(geometry.coordinates)) return geometry;
@@ -119,6 +206,27 @@ function compactGeometry(geometry: any): any {
 
 import { safeSetLocalStorageItem } from './storage';
 export { safeSetLocalStorageItem };
+
+export function getSynchronousGeocode(addressText: string): GeocodeResult | null {
+  const query = addressText.trim();
+  if (!query) return null;
+
+  const cacheKey = `${GEOCODE_CACHE_KEY_PREFIX}${encodeURIComponent(query.toLowerCase())}`;
+  try {
+    const cached = localStorage.getItem(cacheKey);
+    if (cached) {
+      const parsed = JSON.parse(cached);
+      if (parsed && typeof parsed.timestamp === 'number') {
+        if (Date.now() - parsed.timestamp < LOCATION_CACHE_TTL_MS) {
+          return parsed.data as GeocodeResult | null;
+        }
+      } else if (parsed && typeof parsed.lat === 'number' && typeof parsed.lng === 'number') {
+        return parsed as GeocodeResult;
+      }
+    }
+  } catch { }
+  return null;
+}
 
 export async function geocodeAddress(addressText: string, customToken?: string): Promise<GeocodeResult | null> {
   const query = addressText.trim();
@@ -247,6 +355,7 @@ export interface RouteOptions {
   departAt?: string;
   profile?: 'driving' | 'driving-traffic';
   departureKey?: string;
+  skipStorage?: boolean;
 }
 
 export async function getDrivingRoute(
@@ -358,17 +467,31 @@ export async function getMultiStopDrivingRoute(
   const legacyKey = `${DRIVING_CACHE_KEY_PREFIX}multi_${keyCoords}`;
 
   const ttl = getCacheTtlMs(depKey, options.departAt);
+
+  // 1. Check in-memory session cache first
+  const memoryHit = memoryMultiStopRouteCache.get(cacheKey);
+  if (memoryHit && Date.now() - memoryHit.timestamp < ttl) {
+    if (!options.skipStorage) {
+      const entry: CacheEntry<MultiStopDrivingRouteResult> = { data: memoryHit.data, timestamp: memoryHit.timestamp };
+      safeSetLocalStorageItem(cacheKey, JSON.stringify(entry));
+    }
+    return memoryHit.data;
+  }
+
+  // 2. Check localStorage cache
   try {
     const cached = localStorage.getItem(cacheKey) || (depKey === 'baseline' ? localStorage.getItem(legacyKey) : null);
     if (cached) {
       const parsed = JSON.parse(cached);
       if (parsed && typeof parsed.timestamp === 'number') {
         if (Date.now() - parsed.timestamp < ttl) {
+          setMemoryMultiStopCache(cacheKey, parsed.data, parsed.timestamp);
           return parsed.data as MultiStopDrivingRouteResult | null;
         } else {
           localStorage.removeItem(cacheKey);
         }
       } else if (parsed && typeof parsed.durationSeconds === 'number') {
+        setMemoryMultiStopCache(cacheKey, parsed, Date.now());
         return parsed as MultiStopDrivingRouteResult;
       }
     }
@@ -412,8 +535,14 @@ export async function getMultiStopDrivingRoute(
           legs,
         };
 
-        const entry: CacheEntry<MultiStopDrivingRouteResult> = { data: result, timestamp: Date.now() };
-        safeSetLocalStorageItem(cacheKey, JSON.stringify(entry));
+        // Cache in memory
+        setMemoryMultiStopCache(cacheKey, result, Date.now());
+
+        // Save to persistent storage unless skipStorage is explicitly set for trial evaluations
+        if (!options.skipStorage) {
+          const entry: CacheEntry<MultiStopDrivingRouteResult> = { data: result, timestamp: Date.now() };
+          safeSetLocalStorageItem(cacheKey, JSON.stringify(entry));
+        }
 
         return result;
       }
@@ -427,6 +556,42 @@ export async function getMultiStopDrivingRoute(
 
   inFlightRoutes.set(cacheKey, promise as Promise<DrivingRouteResult | null>);
   return promise;
+}
+
+export function getSynchronousDrivingRoute(
+  origin: { lng: number; lat: number },
+  destination: { lng: number; lat: number },
+  optionsOrToken?: string | RouteOptions
+): DrivingRouteResult | null {
+  const options: RouteOptions =
+    typeof optionsOrToken === 'string'
+      ? { customToken: optionsOrToken }
+      : optionsOrToken || {};
+
+  const profile = options.profile || 'driving';
+  const depKey = options.departureKey || (profile === 'driving' ? 'baseline' : 'traffic');
+
+  const originKey = `${origin.lng.toFixed(4)},${origin.lat.toFixed(4)}`;
+  const destKey = `${destination.lng.toFixed(4)},${destination.lat.toFixed(4)}`;
+  const cacheKey = `${DRIVING_CACHE_KEY_PREFIX}${depKey}_${originKey}_${destKey}`;
+  const legacyKey = `${DRIVING_CACHE_KEY_PREFIX}${originKey}_${destKey}`;
+
+  const ttl = getCacheTtlMs(depKey, options.departAt);
+  try {
+    const cached = localStorage.getItem(cacheKey) || (depKey === 'baseline' ? localStorage.getItem(legacyKey) : null);
+    if (!cached) return null;
+    const parsed = JSON.parse(cached);
+    if (parsed && typeof parsed.timestamp === 'number') {
+      if (Date.now() - parsed.timestamp < ttl) {
+        return parsed.data as DrivingRouteResult | null;
+      }
+      return null;
+    }
+    if (parsed && typeof parsed.durationSeconds === 'number') {
+      return parsed as DrivingRouteResult;
+    }
+  } catch { }
+  return null;
 }
 
 export function isDrivingRouteCached(
@@ -480,6 +645,14 @@ export function isMultiStopRouteCached(
   const legacyKey = `${DRIVING_CACHE_KEY_PREFIX}multi_${keyCoords}`;
 
   const ttl = getCacheTtlMs(depKey, options.departAt);
+
+  // Check in-memory cache
+  const memoryHit = memoryMultiStopRouteCache.get(cacheKey);
+  if (memoryHit && Date.now() - memoryHit.timestamp < ttl) {
+    return true;
+  }
+
+  // Check localStorage cache
   try {
     const cached = localStorage.getItem(cacheKey) || (depKey === 'baseline' ? localStorage.getItem(legacyKey) : null);
     if (!cached) return false;

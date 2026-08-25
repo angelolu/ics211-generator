@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { addDays, differenceInCalendarDays, isSameDay, subDays } from 'date-fns';
 import { safeSetLocalStorageItem } from './storage';
 
 const BASE_URL = 'https://api.team-manager.us.d4h.com/v3';
@@ -17,7 +18,7 @@ function dedupe<T>(key: string, fn: () => Promise<T>): Promise<T> {
 }
 
 // Setup axios instance
-const api = axios.create({
+export const api = axios.create({
   baseURL: BASE_URL,
 });
 
@@ -131,6 +132,31 @@ export interface WhoAmIResponse {
   [key: string]: any;
 }
 
+export interface ActivityAttachment {
+  id: number;
+  title?: string;
+  filename?: string;
+  name?: string;
+  fileExt?: string;
+  fileType?: string;
+  fileSize?: number;
+  size?: number; // bytes
+  mimeType?: string;
+  contentType?: string;
+  url?: string;
+  downloadUrl?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  availableSizes?: string[];
+  targetResource?: {
+    resourceType?: string;
+    id?: number;
+    deleted?: boolean;
+  };
+  createdBy?: { id: number; resourceType?: string };
+  [key: string]: any;
+}
+
 export interface Activity {
   type: 'exercise' | 'event' | 'incident';
   id: number;
@@ -151,6 +177,8 @@ export interface Activity {
     coordinates: number[];
   };
   countAttendance?: number;
+  attachments?: ActivityAttachment[];
+  documents?: ActivityAttachment[];
 }
 
 export function getActivityStreetAddress(activity?: Partial<Activity>): string | null {
@@ -262,6 +290,105 @@ export interface Member {
     };
     value: any;
   }[];
+}
+
+/**
+ * Extracts the user's operational region from D4H custom fields or address (e.g. "East Bay", "South Bay", "North Bay", "San Francisco").
+ */
+export function extractMemberRegion(member?: Partial<Member>): string {
+  if (!member) return '';
+
+  // 1. Check customFieldValues for Region field (ID 6328 or title matching "region" / "area")
+  if (Array.isArray(member.customFieldValues)) {
+    const regionEntry = member.customFieldValues.find(
+      (cf) =>
+        cf.customField?.id === 6328 ||
+        cf.customField?.title?.toLowerCase().includes('region') ||
+        cf.customField?.title?.toLowerCase().includes('area')
+    );
+    if (regionEntry) {
+      const val = regionEntry.value;
+      const options = (regionEntry.customField as any)?.options || (regionEntry.customField as any)?.choices;
+
+      // Handle direct string value
+      if (typeof val === 'string' && val.trim()) {
+        const trimmed = val.trim();
+        // Check if numeric string that corresponds to option id
+        if (/^\d+$/.test(trimmed) && Array.isArray(options)) {
+          const opt = options.find((o: any) => String(o.id) === trimmed || String(o.value) === trimmed);
+          if (opt && (opt.value || opt.label || opt.title)) {
+            return opt.value || opt.label || opt.title;
+          }
+        }
+        // Known fallback mapping for CalSAR custom field 6328
+        const numId = parseInt(trimmed, 10);
+        if (numId === 14810) return 'East Bay';
+        if (numId === 14811) return 'South Bay';
+        if (numId === 14812) return 'North Bay';
+        if (numId === 14813) return 'San Francisco';
+        if (numId === 14814) return 'Other State';
+        if (numId === 14815) return 'Other Country';
+
+        return trimmed;
+      }
+
+      // Handle number (option ID)
+      if (typeof val === 'number') {
+        if (Array.isArray(options)) {
+          const opt = options.find((o: any) => o.id === val);
+          if (opt && (opt.value || opt.label || opt.title)) {
+            return opt.value || opt.label || opt.title;
+          }
+        }
+        // Known fallback mapping for CalSAR custom field 6328
+        if (val === 14810) return 'East Bay';
+        if (val === 14811) return 'South Bay';
+        if (val === 14812) return 'North Bay';
+        if (val === 14813) return 'San Francisco';
+        if (val === 14814) return 'Other State';
+        if (val === 14815) return 'Other Country';
+      }
+
+      // Handle array (e.g. [14810] or ["East Bay"])
+      if (Array.isArray(val) && val.length > 0) {
+        const first = val[0];
+        if (typeof first === 'string' && first.trim()) {
+          const trimmed = first.trim();
+          if (parseInt(trimmed, 10) === 14810) return 'East Bay';
+          if (parseInt(trimmed, 10) === 14811) return 'South Bay';
+          if (parseInt(trimmed, 10) === 14812) return 'North Bay';
+          if (parseInt(trimmed, 10) === 14813) return 'San Francisco';
+          return trimmed;
+        }
+        if (typeof first === 'number') {
+          if (Array.isArray(options)) {
+            const opt = options.find((o: any) => o.id === first);
+            if (opt && (opt.value || opt.label || opt.title)) {
+              return opt.value || opt.label || opt.title;
+            }
+          }
+          if (first === 14810) return 'East Bay';
+          if (first === 14811) return 'South Bay';
+          if (first === 14812) return 'North Bay';
+          if (first === 14813) return 'San Francisco';
+        }
+      }
+
+      // Handle object: { value: "East Bay" } or { label: "East Bay" }
+      if (val && typeof val === 'object') {
+        if (typeof (val as any).value === 'string' && (val as any).value.trim()) return (val as any).value.trim();
+        if (typeof (val as any).label === 'string' && (val as any).label.trim()) return (val as any).label.trim();
+        if (typeof (val as any).title === 'string' && (val as any).title.trim()) return (val as any).title.trim();
+      }
+    }
+  }
+
+  // 2. Check standard address region / state
+  if (member.address?.region && typeof member.address.region === 'string' && member.address.region.trim()) {
+    return member.address.region.trim();
+  }
+
+  return '';
 }
 
 /**
@@ -527,6 +654,18 @@ export function getD4HActivityUrl(activityId: number | string, activityType?: st
   return `https://${host}/team/${typePlural}/view/${activityId}`;
 }
 
+export function getD4HMemberUrl(memberId: number | string): string {
+  let subdomain = localStorage.getItem('d4h_team_subdomain');
+  if (!subdomain) {
+    const teamTitle = localStorage.getItem('d4h_team_title');
+    if (teamTitle) {
+      subdomain = teamTitle.toLowerCase().trim().replace(/[^a-z0-9]/g, '');
+    }
+  }
+  const host = subdomain ? `${subdomain}.team-manager.us.d4h.com` : 'team-manager.us.d4h.com';
+  return `https://${host}/team/members/view/${memberId}`;
+}
+
 // In-memory cache for activity lists (cleared on browser reload)
 const activityListCache = new Map<string, { results: Activity[]; cachedAt: number }>();
 
@@ -635,35 +774,67 @@ export const getActivity = async (contextId: number, id: number, type?: string):
     if (itemCache[id]) return itemCache[id];
   } catch { }
 
+  const cacheActivity = (act: Activity) => {
+    try {
+      const itemCache = JSON.parse(localStorage.getItem('d4h_activity_cache') || '{}');
+      itemCache[id] = act;
+      localStorage.setItem('d4h_activity_cache', JSON.stringify(itemCache));
+    } catch { }
+  };
+
   const dedupeKey = `getActivity_${contextId}_${id}_${type || 'unknown'}`;
   return dedupe(dedupeKey, async () => {
     if (type === 'exercise' || type === 'event' || type === 'incident') {
       const res = await api.get<Activity>(`/team/${contextId}/${type}s/${id}`).catch(() => null);
       if (res?.data && res.data.id) {
-        const act = { ...res.data, type: type as any };
-        try {
-          const itemCache = JSON.parse(localStorage.getItem('d4h_activity_cache') || '{}');
-          itemCache[id] = act;
-          localStorage.setItem('d4h_activity_cache', JSON.stringify(itemCache));
-        } catch { }
+        const act: Activity = { ...res.data, type: type as any };
+        cacheActivity(act);
         return act;
       }
     }
 
     let res = await api.get<Activity>(`/team/${contextId}/exercises/${id}`).catch(() => null);
-    if (res?.data && res.data.id) return { ...res.data, type: 'exercise' as const };
+    if (res?.data && res.data.id) {
+      const act: Activity = { ...res.data, type: 'exercise' };
+      cacheActivity(act);
+      return act;
+    }
 
     res = await api.get<Activity>(`/team/${contextId}/events/${id}`).catch(() => null);
-    if (res?.data && res.data.id) return { ...res.data, type: 'event' as const };
+    if (res?.data && res.data.id) {
+      const act: Activity = { ...res.data, type: 'event' };
+      cacheActivity(act);
+      return act;
+    }
 
     res = await api.get<Activity>(`/team/${contextId}/incidents/${id}`).catch(() => null);
-    if (res?.data && res.data.id) return { ...res.data, type: 'incident' as const };
+    if (res?.data && res.data.id) {
+      const act: Activity = { ...res.data, type: 'incident' };
+      cacheActivity(act);
+      return act;
+    }
 
     return null;
   });
 };
 
+export const getSynchronousAttendees = (exerciseId: number): Attendee[] | null => {
+  try {
+    const raw = localStorage.getItem(`d4h_attendees_cache_${exerciseId}`);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && Array.isArray(parsed.data) && Date.now() - (parsed.timestamp || 0) < ACTIVITIES_CACHE_TTL_MS) {
+        return parsed.data;
+      }
+    }
+  } catch { }
+  return null;
+};
+
 export const getAttendees = async (contextId: number, exerciseId: number): Promise<Attendee[]> => {
+  const syncCached = getSynchronousAttendees(exerciseId);
+  if (syncCached) return syncCached;
+
   const dedupeKey = `getAttendees_${contextId}_${exerciseId}`;
   return dedupe(dedupeKey, async () => {
     const res = await api.get<{ results: Attendee[] }>(`/team/${contextId}/attendance`, {
@@ -673,14 +844,376 @@ export const getAttendees = async (contextId: number, exerciseId: number): Promi
       },
     });
 
-    return res.data.results.filter(a =>
+    const attending = res.data.results.filter(a =>
       a.status === 'ATTENDING' ||
       a.status === 'attending' ||
       a.status === 'CONFIRMED' ||
       a.status === 'confirmed'
     );
+
+    try {
+      safeSetLocalStorageItem(`d4h_attendees_cache_${exerciseId}`, JSON.stringify({
+        data: attending,
+        timestamp: Date.now(),
+      }));
+    } catch { }
+
+    return attending;
   });
 };
+
+/**
+ * Extracts a normalized mission / incident prefix from an activity (e.g. "YTO #10", "2026-LAW-54261680").
+ * Strips operational period / day suffixes like "- Day 2", "Op Period 2", "OP2", etc.
+/**
+ * Strips operational period indicators (e.g. "Day 2", "Op Period 3", "(OP 2)", "- Shift 1")
+ * from a reference or title string.
+ */
+function cleanOpPeriodSuffix(str: string): string {
+  return (str || '')
+    .replace(/[\s\-_–—,]+(op|operational\s*period|period|day|shift)\s*#?\d+.*$/i, '')
+    .replace(/\s*\((op|operational\s*period|period|day|shift)\s*#?\d+.*\)$/i, '')
+    .replace(/[\s\-_–—,]+(day\s*\d+|op\s*\d+).*$/i, '')
+    .trim();
+}
+
+/**
+ * Extracts a normalized mission identifier (e.g. "2026-LAW-54261680", "YTO #10", "CA-SNC-001234").
+ */
+export function extractActivityPrefix(activity: Partial<Activity> | null | undefined): string {
+  if (!activity) return '';
+
+  // 1. Check reference field (e.g., "2026-LAW-54261680", "YTO #10", "CA-SNC-001234")
+  const ref = (activity.reference || '').trim();
+  if (ref) {
+    const cleanedRef = cleanOpPeriodSuffix(ref);
+    if (cleanedRef && !/^\d{4}$/.test(cleanedRef)) {
+      return cleanedRef.toLowerCase();
+    }
+  }
+
+  // 2. Check title / description
+  const title = (activity.referenceDescription || activity.description || '').trim();
+  if (title) {
+    // Check for State Incident Number pattern (e.g. "2026-LAW-54261680", "CA-SNC-001234", "2025-SAR-12345")
+    const incidentNumMatch = title.match(/\b(\d{4}-[A-Z0-9]+-\d+)\b/i) || title.match(/\b([A-Z]{2,4}-[A-Z0-9]{2,4}-\d+)\b/i);
+    if (incidentNumMatch) {
+      return incidentNumMatch[0].toLowerCase();
+    }
+
+    // Check for callout/mission prefix pattern (e.g. "YTO #10", "SAR #5", "YTO-10")
+    const calloutMatch = title.match(/\b([A-Z]{2,6}\s*#\s*\d+)\b/i) || title.match(/\b([A-Z]{2,6}-\d+)\b/i);
+    if (calloutMatch) {
+      return calloutMatch[0].toLowerCase().replace(/\s+/g, ' ');
+    }
+
+    // Clean op period suffix
+    const baseTitle = cleanOpPeriodSuffix(title);
+    if (baseTitle && !/^\d{4}$/.test(baseTitle)) {
+      return baseTitle.toLowerCase();
+    }
+  }
+
+  return '';
+}
+
+/**
+ * Determines whether two activities belong to the same multi-day/multi-period mission
+ * based on matching reference, incident number, or common prefix.
+ */
+export function areActivitiesSameMission(
+  act1: Partial<Activity> | null | undefined,
+  act2: Partial<Activity> | null | undefined
+): boolean {
+  if (!act1 || !act2) return false;
+  if (act1.id && act2.id && act1.id === act2.id) return true;
+
+  const title1 = (act1.referenceDescription || act1.description || '').trim().toLowerCase();
+  const title2 = (act2.referenceDescription || act2.description || '').trim().toLowerCase();
+
+  // 1. Direct reference equality (ignoring op suffix)
+  const ref1 = cleanOpPeriodSuffix(act1.reference || '').toLowerCase();
+  const ref2 = cleanOpPeriodSuffix(act2.reference || '').toLowerCase();
+  if (ref1 && ref2 && ref1 === ref2 && !/^\d{4}$/.test(ref1)) {
+    return true;
+  }
+
+  // 2. Incident Number matching (e.g. 2026-LAW-54261680)
+  const incNumRegex = /\b(\d{4}-[A-Z0-9]+-\d+)\b/i;
+  const inc1 = (act1.reference || '').match(incNumRegex) || title1.match(incNumRegex);
+  const inc2 = (act2.reference || '').match(incNumRegex) || title2.match(incNumRegex);
+  if (inc1 && inc2 && inc1[1].toLowerCase() === inc2[1].toLowerCase()) {
+    return true;
+  }
+
+  // 3. Callout Code matching (e.g. "YTO #10", "YTO-10")
+  const calloutRegex = /\b([A-Z]{2,6})\s*#?\s*(\d+)\b/i;
+  const c1 = (act1.reference || '').match(calloutRegex) || title1.match(calloutRegex);
+  const c2 = (act2.reference || '').match(calloutRegex) || title2.match(calloutRegex);
+  if (c1 && c2) {
+    const code1 = `${c1[1].toLowerCase()}-${c1[2]}`;
+    const code2 = `${c2[1].toLowerCase()}-${c2[2]}`;
+    if (code1 === code2) {
+      return true;
+    }
+  }
+
+  // 4. Exact cleaned base title match (must be a substantial string, not just generic words or year)
+  const base1 = cleanOpPeriodSuffix(act1.referenceDescription || act1.description || '').trim().toLowerCase();
+  const base2 = cleanOpPeriodSuffix(act2.referenceDescription || act2.description || '').trim().toLowerCase();
+  if (base1 && base2 && base1 === base2 && base1.length >= 8 && !/^\d{4}$/.test(base1)) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Searches for an immediate previous calendar day activity that belongs to the same mission.
+ */
+export async function findImmediatePreviousDayActivity(
+  contextId: number,
+  currentActivity: Activity,
+  allActivities?: Activity[]
+): Promise<Activity | null> {
+  if (!currentActivity?.startsAt) return null;
+  const currentStart = new Date(currentActivity.startsAt);
+  if (isNaN(currentStart.getTime())) return null;
+
+  // 1. Check in passed activities or cached activity list
+  let activityList: Activity[] = allActivities || [];
+  if (activityList.length === 0) {
+    try {
+      const itemCache = JSON.parse(localStorage.getItem('d4h_activity_cache') || '{}');
+      activityList = Object.values(itemCache);
+    } catch { }
+  }
+
+  // Helper to find match in candidate list
+  const findCandidate = (list: Activity[]): Activity | null => {
+    for (const act of list) {
+      if (act.id === currentActivity.id) continue;
+      if (!act.startsAt) continue;
+      const actStart = new Date(act.startsAt);
+      if (isNaN(actStart.getTime())) continue;
+
+      const dayDiff = differenceInCalendarDays(currentStart, actStart);
+      // Immediate previous calendar day
+      if (dayDiff === 1 && areActivitiesSameMission(currentActivity, act)) {
+        return act;
+      }
+    }
+    return null;
+  };
+
+  const cachedCandidate = findCandidate(activityList);
+  if (cachedCandidate) return cachedCandidate;
+
+  // Fetch activities from 4 days ago up to current start
+  try {
+    const fourDaysAgo = subDays(currentStart, 4).toISOString();
+    const fetched = await getActivities(contextId, {
+      startsAfter: fourDaysAgo,
+      startsBefore: currentActivity.startsAt,
+    });
+    return findCandidate(fetched);
+  } catch (err) {
+    console.warn('[D4H Multi-Op] Failed to search for previous day activity:', err);
+    return null;
+  }
+}
+
+/**
+ * Searches for an immediate next calendar day activity that belongs to the same mission.
+ */
+export async function findImmediateNextDayActivity(
+  contextId: number,
+  currentActivity: Activity,
+  allActivities?: Activity[]
+): Promise<Activity | null> {
+  if (!currentActivity?.startsAt) return null;
+  const currentStart = new Date(currentActivity.startsAt);
+  if (isNaN(currentStart.getTime())) return null;
+
+  // 1. Check in passed activities or cached activity list
+  let activityList: Activity[] = allActivities || [];
+  if (activityList.length === 0) {
+    try {
+      const itemCache = JSON.parse(localStorage.getItem('d4h_activity_cache') || '{}');
+      activityList = Object.values(itemCache);
+    } catch { }
+  }
+
+  // Helper to find match in candidate list
+  const findCandidate = (list: Activity[]): Activity | null => {
+    for (const act of list) {
+      if (act.id === currentActivity.id) continue;
+      if (!act.startsAt) continue;
+      const actStart = new Date(act.startsAt);
+      if (isNaN(actStart.getTime())) continue;
+
+      const dayDiff = differenceInCalendarDays(actStart, currentStart);
+      // Immediate next calendar day
+      if (dayDiff === 1 && areActivitiesSameMission(currentActivity, act)) {
+        return act;
+      }
+    }
+    return null;
+  };
+
+  const cachedCandidate = findCandidate(activityList);
+  if (cachedCandidate) return cachedCandidate;
+
+  // Fetch activities from current start up to 4 days forward
+  try {
+    const fourDaysLater = addDays(currentStart, 4).toISOString();
+    const fetched = await getActivities(contextId, {
+      startsAfter: currentActivity.startsAt,
+      startsBefore: fourDaysLater,
+    });
+    return findCandidate(fetched);
+  } catch (err) {
+    console.warn('[D4H Multi-Op] Failed to search for next day activity:', err);
+    return null;
+  }
+}
+
+export interface AdjacentOpPeriodsResult {
+  yesterdayActivity: Activity | null;
+  tomorrowActivity: Activity | null;
+  hasYesterdayOp: boolean;
+  hasTomorrowOp: boolean;
+  isMultiDaySpanning: boolean;
+}
+
+export async function getAdjacentOpPeriods(
+  contextId: number,
+  currentActivity: Activity | null
+): Promise<AdjacentOpPeriodsResult> {
+  const result: AdjacentOpPeriodsResult = {
+    yesterdayActivity: null,
+    tomorrowActivity: null,
+    hasYesterdayOp: false,
+    hasTomorrowOp: false,
+    isMultiDaySpanning: false,
+  };
+
+  if (!contextId || !currentActivity) return result;
+
+  // Check if current activity itself spans multiple calendar days
+  if (currentActivity.startsAt) {
+    const sDate = new Date(currentActivity.startsAt);
+    const eDate = currentActivity.endsAt ? new Date(currentActivity.endsAt) : sDate;
+    if (!isNaN(sDate.getTime()) && !isNaN(eDate.getTime()) && !isSameDay(sDate, eDate)) {
+      result.isMultiDaySpanning = true;
+    }
+  }
+
+  try {
+    const [prevAct, nextAct] = await Promise.all([
+      findImmediatePreviousDayActivity(contextId, currentActivity),
+      findImmediateNextDayActivity(contextId, currentActivity),
+    ]);
+
+    if (prevAct) {
+      result.yesterdayActivity = prevAct;
+      result.hasYesterdayOp = true;
+    }
+    if (nextAct) {
+      result.tomorrowActivity = nextAct;
+      result.hasTomorrowOp = true;
+    }
+  } catch (err) {
+    console.warn('[D4H Multi-Op] Failed to fetch adjacent op periods:', err);
+  }
+
+  return result;
+}
+
+export interface PreviousOpPeriodResult {
+  previousActivity: Activity | null;
+  previousMemberIds: Set<number>;
+  previousAttendees: Attendee[];
+}
+
+/**
+ * Pre-loads the immediate previous day's responding personnel for an activity.
+ * Supports both:
+ * 1. Multiple distinct D4H activities with matching incident prefix/reference on consecutive days.
+ * 2. Single multi-day D4H activity where attendees are scheduled on consecutive operational dates.
+ * 
+ * Automatically persists previous activity and attendees into localStorage.
+ */
+export async function getPreviousOpPeriodAttendees(
+  contextId: number,
+  currentActivity: Activity | null,
+  currentAttendees?: Attendee[]
+): Promise<PreviousOpPeriodResult> {
+  const result: PreviousOpPeriodResult = {
+    previousActivity: null,
+    previousMemberIds: new Set<number>(),
+    previousAttendees: [],
+  };
+
+  if (!contextId || !currentActivity) return result;
+
+  const currentStart = currentActivity.startsAt ? new Date(currentActivity.startsAt) : null;
+
+  // 1. Check for single multi-day / multi-period activity shifts in currentAttendees
+  if (currentAttendees && currentAttendees.length > 0 && currentStart && !isNaN(currentStart.getTime())) {
+    currentAttendees.forEach((att) => {
+      const memberId = att.member?.id;
+      if (!memberId) return;
+
+      if (att.startsAt) {
+        const attStart = new Date(att.startsAt);
+        if (!isNaN(attStart.getTime())) {
+          const dayDiff = differenceInCalendarDays(currentStart, attStart);
+          if (dayDiff === 1) {
+            result.previousMemberIds.add(memberId);
+            result.previousAttendees.push(att);
+          }
+        }
+      }
+    });
+  }
+
+  // 2. Check for separate D4H activity on the immediate previous calendar day
+  try {
+    const prevAct = await findImmediatePreviousDayActivity(contextId, currentActivity);
+    if (prevAct) {
+      result.previousActivity = prevAct;
+
+      // Pre-load immediate previous activity's attendees
+      const prevAttendees = await getAttendees(contextId, prevAct.id);
+      result.previousAttendees = [...result.previousAttendees, ...prevAttendees];
+
+      prevAttendees.forEach((att) => {
+        const mid = att.member?.id;
+        if (mid) {
+          result.previousMemberIds.add(mid);
+        }
+      });
+
+      // Pre-fetch missing member profiles in background to populate caches
+      const memberIdsToFetch = Array.from(result.previousMemberIds);
+      if (memberIdsToFetch.length > 0) {
+        getMemberDetails(contextId, memberIdsToFetch).catch(() => { });
+      }
+
+      // Persist previous activity to activity cache
+      try {
+        const itemCache = JSON.parse(localStorage.getItem('d4h_activity_cache') || '{}');
+        itemCache[prevAct.id] = prevAct;
+        safeSetLocalStorageItem('d4h_activity_cache', JSON.stringify(itemCache));
+      } catch { }
+    }
+  } catch (err) {
+    console.warn('[D4H Multi-Op] Failed to load previous op period attendees:', err);
+  }
+
+  return result;
+}
 
 export const getSynchronousMember = (contextId: number, memberId: number): Member | null => {
   if (!contextId || !memberId) return null;
@@ -1055,42 +1588,265 @@ export interface UserPermissions {
   memberId: number | null;
 }
 
+const permissionsMemoryCache = new Map<number, { perms: UserPermissions; cachedAt: number }>();
+const PERMISSIONS_TTL_MS = 60 * 60 * 1000; // 60 minutes TTL
+
 export const getCurrentUserPermissions = async (
   contextId?: number | string
 ): Promise<UserPermissions> => {
+  const targetContextId = contextId ? Number(contextId) : null;
+  if (targetContextId) {
+    const cached = permissionsMemoryCache.get(targetContextId);
+    if (cached && Date.now() - cached.cachedAt < PERMISSIONS_TTL_MS) {
+      return cached.perms;
+    }
+  }
+
+  const dedupeKey = `getCurrentUserPermissions_${targetContextId || 'default'}`;
+  return dedupe(dedupeKey, async () => {
+    try {
+      const res = await api.get<WhoAmIResponse>('/whoami');
+      const member = targetContextId
+        ? res.data.members?.find((m) => m.owner.id === targetContextId)
+        : res.data.members?.find((m) => m.owner.resourceType === 'Team') || res.data.members?.[0];
+
+      const perms = member?.permissions as Record<string, any> | undefined;
+      const attPerms = perms?.ActivityAttendance;
+      const incPerms = perms?.Incident;
+      const exPerms = perms?.Exercise;
+      const evPerms = perms?.Event;
+
+      const result: UserPermissions = {
+        canUpdateOwnAttendance: Boolean(attPerms?.UPDATEOWN),
+        canCreateAttendance: Boolean(attPerms?.CREATE),
+        canUpdateAllAttendance: Boolean(attPerms?.UPDATE),
+        canUpdateExercise: Boolean(exPerms?.UPDATE),
+        canUpdateIncident: Boolean(incPerms?.UPDATE),
+        canUpdateEvent: Boolean(evPerms?.UPDATE),
+        memberId: member?.id || null,
+      };
+
+      if (targetContextId) {
+        permissionsMemoryCache.set(targetContextId, { perms: result, cachedAt: Date.now() });
+      }
+
+      return result;
+    } catch (e) {
+      return {
+        canUpdateOwnAttendance: false,
+        canCreateAttendance: false,
+        canUpdateAllAttendance: false,
+        canUpdateExercise: false,
+        canUpdateIncident: false,
+        canUpdateEvent: false,
+        memberId: null,
+      };
+    }
+  });
+};
+
+export interface CanUserRespondParams {
+  isLocal?: boolean;
+  isPast?: boolean;
+  contextId?: number | null;
+  activityId?: number | null;
+  activityType?: string;
+  userPermissions?: UserPermissions | null;
+  userAttendance?: Attendee | null;
+  attendees?: Attendee[];
+  effectiveMemberId?: number | null;
+}
+
+export function canUserRespondToActivity(params: CanUserRespondParams): boolean {
+  const {
+    isLocal,
+    isPast,
+    contextId,
+    activityId,
+    activityType,
+    userPermissions,
+    userAttendance,
+    attendees,
+    effectiveMemberId,
+  } = params;
+
+  if (isLocal || isPast || !contextId || !activityId || !userPermissions) return false;
+
+  const actType = (activityType || 'exercise').toLowerCase();
+  const hasActivityAdminPermission =
+    actType === 'incident'
+      ? userPermissions.canUpdateIncident
+      : actType === 'event'
+      ? userPermissions.canUpdateEvent
+      : userPermissions.canUpdateExercise;
+
+  const hasCreatePermission =
+    userPermissions.canCreateAttendance || userPermissions.canUpdateAllAttendance || hasActivityAdminPermission;
+
+  if (hasCreatePermission) return true;
+
+  const hasExistingAttendanceRecord = Boolean(
+    userAttendance?.id ||
+    (attendees && effectiveMemberId && attendees.some((a) => a.member?.id === effectiveMemberId && a.id))
+  );
+
+  return userPermissions.canUpdateOwnAttendance && hasExistingAttendanceRecord;
+}
+
+export function formatFileSize(bytes?: number): string {
+  if (bytes === undefined || bytes === null || bytes <= 0) return '';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+export const getSynchronousActivityAttachments = (activityId: number | string): ActivityAttachment[] | null => {
   try {
-    const res = await api.get<WhoAmIResponse>('/whoami');
-    const targetContextId = contextId ? Number(contextId) : null;
-    const member = targetContextId
-      ? res.data.members?.find((m) => m.owner.id === targetContextId)
-      : res.data.members?.find((m) => m.owner.resourceType === 'Team') || res.data.members?.[0];
+    const raw = localStorage.getItem(`d4h_activity_attachments_${activityId}`);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && Array.isArray(parsed.data) && Date.now() - (parsed.timestamp || 0) < ACTIVITIES_CACHE_TTL_MS) {
+        return parsed.data;
+      }
+    }
+  } catch { }
+  return null;
+};
 
-    const perms = member?.permissions as Record<string, any> | undefined;
-    const attPerms = perms?.ActivityAttendance;
-    const incPerms = perms?.Incident;
-    const exPerms = perms?.Exercise;
-    const evPerms = perms?.Event;
+export const getActivityAttachments = async (
+  contextId: number,
+  activityId: number | string,
+  _activityType?: string
+): Promise<ActivityAttachment[]> => {
+  const sync = getSynchronousActivityAttachments(activityId);
+  if (sync) return sync;
 
-    return {
-      canUpdateOwnAttendance: Boolean(attPerms?.UPDATEOWN),
-      canCreateAttendance: Boolean(attPerms?.CREATE),
-      canUpdateAllAttendance: Boolean(attPerms?.UPDATE),
-      canUpdateExercise: Boolean(exPerms?.UPDATE),
-      canUpdateIncident: Boolean(incPerms?.UPDATE),
-      canUpdateEvent: Boolean(evPerms?.UPDATE),
-      memberId: member?.id || null,
-    };
+  const dedupeKey = `getActivityAttachments_${contextId}_${activityId}`;
+  return dedupe(dedupeKey, async () => {
+    try {
+      // D4H API v3: Documents attached to exercises/events/incidents are queried via target_resource_id
+      const res = await api.get<{ results?: ActivityAttachment[]; data?: ActivityAttachment[] } | ActivityAttachment[]>(
+        `/team/${contextId}/documents`,
+        { params: { target_resource_id: activityId, size: 250 } }
+      ).catch((e) => {
+        console.warn(`[D4H API] Failed to fetch documents for activity ${activityId}:`, e);
+        return null;
+      });
+
+      let attachments: ActivityAttachment[] = [];
+      if (res?.data) {
+        if (Array.isArray(res.data)) {
+          attachments = res.data;
+        } else if (Array.isArray((res.data as any).results)) {
+          attachments = (res.data as any).results;
+        } else if (Array.isArray((res.data as any).data)) {
+          attachments = (res.data as any).data;
+        }
+      }
+
+      // If results empty, check embedded attachments on activity cache
+      if (attachments.length === 0) {
+        try {
+          const itemCache = JSON.parse(localStorage.getItem('d4h_activity_cache') || '{}');
+          const act = itemCache[activityId];
+          if (act && Array.isArray(act.attachments) && act.attachments.length > 0) {
+            attachments = act.attachments;
+          } else if (act && Array.isArray(act.documents) && act.documents.length > 0) {
+            attachments = act.documents;
+          }
+        } catch { }
+      }
+
+      // Cache to localStorage (15m TTL)
+      try {
+        safeSetLocalStorageItem(
+          `d4h_activity_attachments_${activityId}`,
+          JSON.stringify({ data: attachments, timestamp: Date.now() })
+        );
+      } catch { }
+
+      return attachments;
+    } catch (e) {
+      console.warn(`[D4H API] Failed to fetch attachments for activity ${activityId}:`, e);
+      return [];
+    }
+  });
+};
+
+export const downloadActivityAttachment = async (
+  contextId: number,
+  _activityId: number | string,
+  attachment: ActivityAttachment,
+  _activityType?: string
+): Promise<void> => {
+  const ext = attachment.fileExt ? `.${attachment.fileExt.replace(/^\./, '')}` : '';
+  let filename = attachment.filename || attachment.name || attachment.title || `attachment_${attachment.id}`;
+  if (ext && !filename.toLowerCase().endsWith(ext.toLowerCase())) {
+    filename = `${filename}${ext}`;
+  }
+
+  const targetUrl =
+    attachment.downloadUrl ||
+    attachment.url ||
+    `/team/${contextId}/documents/${attachment.id}/download`;
+
+  try {
+    const res = await api.get(targetUrl, { responseType: 'blob' });
+    const mime = attachment.fileType || attachment.mimeType || attachment.contentType || 'application/octet-stream';
+    const blob = new Blob([res.data], { type: mime });
+    const blobUrl = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = blobUrl;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
   } catch (e) {
-    return {
-      canUpdateOwnAttendance: false,
-      canCreateAttendance: false,
-      canUpdateAllAttendance: false,
-      canUpdateExercise: false,
-      canUpdateIncident: false,
-      canUpdateEvent: false,
-      memberId: null,
-    };
+    console.warn('[D4H API] Blob download failed, attempting window.open fallback:', e);
+    if (attachment.url && (attachment.url.startsWith('http://') || attachment.url.startsWith('https://'))) {
+      window.open(attachment.url, '_blank', 'noopener,noreferrer');
+    }
   }
 };
+
+const attachmentBlobCache = new Map<number, string>();
+
+export const getActivityAttachmentPreviewBlobUrl = async (
+  contextId: number,
+  attachmentId: number,
+  mimeType?: string
+): Promise<string | null> => {
+  if (attachmentBlobCache.has(attachmentId)) {
+    return attachmentBlobCache.get(attachmentId)!;
+  }
+
+  try {
+    const res = await api.get(`/team/${contextId}/documents/${attachmentId}/download`, {
+      params: { size: 'PREVIEW' },
+      responseType: 'blob',
+    });
+    if (res.data) {
+      const blob = new Blob([res.data], { type: mimeType || 'image/jpeg' });
+      const url = URL.createObjectURL(blob);
+      attachmentBlobCache.set(attachmentId, url);
+      return url;
+    }
+  } catch {
+    try {
+      const res = await api.get(`/team/${contextId}/documents/${attachmentId}/download`, {
+        responseType: 'blob',
+      });
+      if (res.data) {
+        const blob = new Blob([res.data], { type: mimeType || 'image/jpeg' });
+        const url = URL.createObjectURL(blob);
+        attachmentBlobCache.set(attachmentId, url);
+        return url;
+      }
+    } catch {}
+  }
+  return null;
+};
+
 
 
