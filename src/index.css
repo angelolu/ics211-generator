@@ -124,10 +124,25 @@
   --sidebar-ring: oklch(0.709 0.01 56.259);
 }
 
+html, body {
+  overflow-x: clip;
+  max-width: 100vw;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
 /* ── App Shell ────────────────────────────────────────── */
 .app-bg {
   background: var(--slate-1);
   min-height: 100vh;
+  width: 100%;
+  max-width: 100vw;
   color: var(--slate-12);
 }
 
@@ -851,10 +866,16 @@
 @media (max-width: 640px) {
   .dashboard-main {
     padding: 14px 12px 28px !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    box-sizing: border-box !important;
   }
 
   .activity-details-main {
     padding: 12px 12px 24px !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    box-sizing: border-box !important;
   }
 
   .activity-details-main.map-view-active {
@@ -865,29 +886,40 @@
   .activity-info-desc-card,
   .activity-info-view .card {
     padding: 14px 16px !important;
+    max-width: 100% !important;
+    box-sizing: border-box !important;
   }
 
   .activity-details-topbar {
     margin-bottom: 12px !important;
     gap: 8px !important;
+    max-width: 100% !important;
   }
 
   .form-controls-toolbar {
     padding: 12px 14px !important;
     margin-bottom: 14px !important;
+    max-width: 100% !important;
+    box-sizing: border-box !important;
   }
 
   .dashboard-controls {
+    display: flex !important;
     flex-direction: row !important;
+    flex-wrap: wrap !important;
     align-items: center !important;
     justifyContent: space-between !important;
     gap: 8px !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    box-sizing: border-box !important;
   }
 
   .dashboard-switcher-row {
     display: flex !important;
     align-items: center !important;
     width: auto !important;
+    max-width: 100% !important;
     gap: 8px !important;
   }
 
@@ -895,6 +927,7 @@
     display: flex !important;
     align-items: center !important;
     width: auto !important;
+    max-width: 100% !important;
     padding-bottom: 0 !important;
     margin-left: auto !important;
   }
@@ -902,6 +935,9 @@
   .activity-card {
     padding: 12px 14px !important;
     gap: 12px !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    box-sizing: border-box !important;
   }
 
   .activity-card-chevron {

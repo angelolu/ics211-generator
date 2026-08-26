@@ -37,7 +37,7 @@ import {
   UserCheck,
   Users,
 } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { formatActivityLocation, getActivities, getCurrentUserAttendingActivityIds, getCurrentUserMemberInfo, getD4HErrorMessage, logCurrentUserInfo } from '../api/d4h';
 import type { Activity } from '../api/d4h';
@@ -80,24 +80,24 @@ let sessionSelectedMonth: Date | null = null;
 
 interface MonthSwitcherBarProps {
   currentMonth: Date;
-  onMonthChange: (newMonth: Date) => void;
+  onMonthChange: (newMonth: Date, scrollToCurrentDate?: boolean) => void;
 }
 
 function MonthSwitcherBar({ currentMonth, onMonthChange }: MonthSwitcherBarProps) {
   const isCurrentMonth = isSameMonth(currentMonth, new Date());
 
   return (
-    <div className="sticky top-0 z-20 -mx-4 sm:mx-0 px-4 sm:px-3 py-1.5 mb-3 bg-white/90 dark:bg-slate-900/90 backdrop-blur-md border-y sm:border sm:rounded-xl border-slate-200 dark:border-slate-800 shadow-2xs">
-      <div className="flex items-center justify-between gap-3">
-        {/* Navigation Buttons + Month Label + Today Jump */}
-        <div className="flex items-center gap-4">
-          <div className="flex items-center gap-0.5 sm:gap-1">
+    <div className="sticky top-[60px] z-30 w-full px-3 sm:px-3.5 py-2 mb-3 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border rounded-xl border-slate-200 dark:border-slate-800 shadow-xs">
+      <div className="flex items-center justify-between gap-2 sm:gap-3 min-w-0">
+        {/* Navigation Buttons + Month Label */}
+        <div className="flex items-center gap-2 sm:gap-2.5 min-w-0">
+          <div className="flex items-center gap-0.5 sm:gap-1 shrink-0">
             <Button
               variant="outline"
               size="sm"
               onClick={() => onMonthChange(subMonths(currentMonth, 1))}
               title="Previous Month"
-              className="size-7 p-0 rounded-lg"
+              className="size-7 p-0 rounded-lg shrink-0"
             >
               <ChevronLeft size={15} />
             </Button>
@@ -106,27 +106,27 @@ function MonthSwitcherBar({ currentMonth, onMonthChange }: MonthSwitcherBarProps
               size="sm"
               onClick={() => onMonthChange(addMonths(currentMonth, 1))}
               title="Next Month"
-              className="size-7 p-0 rounded-lg"
+              className="size-7 p-0 rounded-lg shrink-0"
             >
               <ChevronRight size={15} />
             </Button>
           </div>
 
-          <span className="text-sm sm:text-base font-bold text-slate-900 dark:text-slate-100 tracking-tight whitespace-nowrap">
+          <span className="text-sm sm:text-base font-bold text-slate-900 dark:text-slate-100 tracking-tight truncate min-w-0">
             {format(currentMonth, 'MMMM yyyy')}
           </span>
-
-          {!isCurrentMonth && (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => onMonthChange(new Date())}
-              className="h-7 px-2.5 text-xs font-semibold rounded-md shadow-2xs"
-            >
-              Today
-            </Button>
-          )}
         </div>
+
+        {!isCurrentMonth && (
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => onMonthChange(new Date(), true)}
+            className="h-7 px-2.5 text-xs font-semibold rounded-md shadow-2xs shrink-0"
+          >
+            Today
+          </Button>
+        )}
       </div>
     </div>
   );
@@ -170,10 +170,16 @@ export function Dashboard() {
   const effectiveActivitiesView = isMobile ? 'list' : activitiesView;
   const [currentMonth, setCurrentMonth] = useState<Date>(() => sessionSelectedMonth || new Date());
   const [attendingActivityIds, setAttendingActivityIds] = useState<Set<number>>(new Set());
+  const hasAutoScrolledRef = useRef(false);
 
-  const handleMonthChange = (newMonth: Date) => {
+  const handleMonthChange = (newMonth: Date, scrollToCurrentDate = false) => {
     sessionSelectedMonth = newMonth;
     setCurrentMonth(newMonth);
+    if (!scrollToCurrentDate) {
+      window.scrollTo({ top: 0, behavior: 'instant' });
+    } else {
+      hasAutoScrolledRef.current = false;
+    }
   };
 
   const loadLocalRosters = () => {
@@ -328,42 +334,71 @@ export function Dashboard() {
     };
   }, [viewActivities]);
 
+  useEffect(() => {
+    if (isLoading || hasAutoScrolledRef.current) return;
+    if (viewMode === 'activities' && effectiveActivitiesView === 'list' && filtered.length > 0 && isSameMonth(currentMonth, new Date())) {
+      const todayStart = startOfDay(new Date());
+      // Find first event today or in the future
+      const targetActivity = filtered.find(a => {
+        const rawEnd = a.endsAt ? new Date(a.endsAt) : new Date(a.startsAt);
+        return (isNaN(rawEnd.getTime()) ? new Date() : rawEnd) >= todayStart;
+      });
+
+      if (targetActivity) {
+        const timer = setTimeout(() => {
+          const el = document.getElementById(`activity-card-${targetActivity.id}`);
+          if (el) {
+            const top = el.getBoundingClientRect().top + window.pageYOffset - 124;
+            window.scrollTo({ top: Math.max(0, top), behavior: 'smooth' });
+          }
+          hasAutoScrolledRef.current = true;
+        }, 50);
+        return () => clearTimeout(timer);
+      } else {
+        hasAutoScrolledRef.current = true;
+      }
+    } else if (!isLoading) {
+      hasAutoScrolledRef.current = true;
+    }
+  }, [isLoading, viewMode, effectiveActivitiesView, filtered, currentMonth]);
+
   return (
     <Tooltip.Provider delayDuration={400}>
       <div className="app-bg" style={{ minHeight: '100vh' }}>
         {/* ── Header ───────────────────────────────────────── */}
         <header className="app-header">
-          <div style={{ maxWidth: 1200, margin: '0 auto', padding: '0 24px', height: 60, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <div className="w-full max-w-[1200px] mx-auto px-3 sm:px-6 h-[60px] flex items-center justify-between gap-2.5">
+            <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
               <div style={{
                 width: 34, height: 34, borderRadius: 9,
                 background: 'linear-gradient(145deg, #0d2d66, #061B44)',
                 border: '1px solid rgba(220,195,148,0.3)',
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
                 boxShadow: '0 2px 8px rgba(6,27,68,0.35)',
+                flexShrink: 0,
               }}>
                 <ActivityIcon size={16} color="white" strokeWidth={2.5} />
               </div>
-              <div>
+              <div className="min-w-0">
                 <div style={{ fontWeight: 700, fontSize: '0.9375rem', color: 'white', lineHeight: 1.2 }}>
                   ICS 211
                 </div>
-                <div style={{ fontSize: '0.7rem', color: 'rgba(220,195,148,0.7)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+                <div style={{ fontSize: '0.7rem', color: 'rgba(220,195,148,0.7)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em' }} className="truncate">
                   Roster Generator
                 </div>
               </div>
             </div>
 
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div className="flex items-center gap-2 shrink-0">
               <DropdownMenu.Root>
                 <DropdownMenu.Trigger asChild>
                   <Button
                     variant="ghost"
                     size="sm"
-                    className="h-8 gap-1.5 px-3 bg-white/10 hover:bg-white/20 text-white/90 hover:text-white border border-white/15 font-semibold text-xs rounded-md"
+                    className="h-8 gap-1.5 px-2.5 sm:px-3 bg-white/10 hover:bg-white/20 text-white/90 hover:text-white border border-white/15 font-semibold text-xs rounded-md shrink-0"
                   >
-                    {contextId ? 'D4H' : 'D4H disconnected'}
-                    <ChevronDown size={14} />
+                    <span className="truncate">{contextId ? 'D4H' : 'D4H disconnected'}</span>
+                    <ChevronDown size={14} className="opacity-75 shrink-0" />
                   </Button>
                 </DropdownMenu.Trigger>
                 <DropdownMenu.Portal>
@@ -682,8 +717,8 @@ export function Dashboard() {
                         <Button
                           variant="secondary"
                           size="sm"
-                          onClick={() => handleMonthChange(new Date())}
-                          className="font-semibold text-xs"
+                          onClick={() => handleMonthChange(new Date(), true)}
+                          className="font-semibold text-xs mt-2"
                         >
                           Jump to Current Month ({format(new Date(), 'MMM yyyy')})
                         </Button>
@@ -745,34 +780,34 @@ export function Dashboard() {
                   return (
                     <div
                       key={roster.id}
-                      className="card card-interactive activity-card animate-slide-up group flex items-center gap-3.5 sm:gap-4 p-3 sm:p-4 rounded-xl border border-[var(--slate-4)] hover:border-[var(--navy-6)] bg-white hover:bg-[var(--slate-1)] dark:bg-[var(--slate-2)] transition-all duration-150 cursor-pointer shadow-xs"
+                      className="card card-interactive activity-card animate-slide-up group flex items-center gap-3 sm:gap-4 p-3 sm:p-4 rounded-xl border border-[var(--slate-4)] hover:border-[var(--navy-6)] bg-white hover:bg-[var(--slate-1)] dark:bg-[var(--slate-2)] transition-all duration-150 cursor-pointer shadow-xs min-w-0 max-w-full overflow-hidden"
                       style={{ animationDelay: `${idx * 25}ms`, animationFillMode: 'both' }}
                       onClick={() => navigate(`/exercise/${roster.id}`, { state: { exercise: roster } })}
                     >
                       <div
-                        className="activity-card-date size-12 sm:size-14 rounded-xl bg-emerald-50 border border-emerald-300 text-emerald-950 dark:bg-emerald-950/50 dark:border-emerald-700 dark:text-emerald-200 flex flex-col items-center justify-center shrink-0 transition-transform duration-150 group-hover:scale-105"
+                        className="activity-card-date size-11 sm:size-14 rounded-xl bg-emerald-50 border border-emerald-300 text-emerald-950 dark:bg-emerald-950/50 dark:border-emerald-700 dark:text-emerald-200 flex flex-col items-center justify-center shrink-0 transition-transform duration-150 group-hover:scale-105"
                       >
                         <div className="text-[0.625rem] sm:text-[0.6875rem] font-bold text-emerald-700 dark:text-emerald-300 uppercase tracking-wider leading-none">
                           {format(displayDate, 'MMM')}
                         </div>
-                        <div className="text-lg sm:text-xl font-extrabold text-emerald-950 dark:text-emerald-100 leading-none mt-1">
+                        <div className="text-base sm:text-xl font-extrabold text-emerald-950 dark:text-emerald-100 leading-none mt-0.5 sm:mt-1">
                           {format(displayDate, 'd')}
                         </div>
                       </div>
 
-                      <div className="flex-1 min-w-0">
+                      <div className="flex-1 min-w-0 overflow-hidden">
                         <div className="flex items-center gap-1.5 sm:gap-2 mb-1 flex-wrap">
-                          <Badge variant="outline" className="h-5 px-2 text-[0.6875rem] font-bold uppercase border-emerald-300 bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">
+                          <Badge variant="outline" className="h-5 px-2 text-[0.6875rem] font-bold uppercase border-emerald-300 bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300 shrink-0">
                             Local
                           </Badge>
-                          <span className="font-semibold text-sm sm:text-[0.9375rem] text-slate-900 dark:text-slate-100 truncate flex-1 min-w-[120px]">
-                            {title}
-                          </span>
                         </div>
-                        <div className="flex items-center gap-3 sm:gap-4 flex-wrap text-xs sm:text-[0.8125rem] text-slate-500 dark:text-slate-400">
-                          <div className="flex items-center gap-1.5">
-                            <Clock size={13} className="text-slate-400" />
-                            <span>{format(displayDate, 'yyyy-MM-dd HH:mm')}</span>
+                        <div className="font-semibold text-sm sm:text-[0.9375rem] text-slate-900 dark:text-slate-100 truncate mb-1 leading-snug w-full">
+                          {title}
+                        </div>
+                        <div className="flex items-center gap-2.5 sm:gap-4 flex-wrap text-xs sm:text-[0.8125rem] text-slate-500 dark:text-slate-400 min-w-0">
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <Clock size={13} className="text-slate-400 shrink-0" />
+                            <span className="whitespace-nowrap">{format(displayDate, 'yyyy-MM-dd HH:mm')}</span>
                           </div>
                         </div>
                       </div>
@@ -1201,8 +1236,9 @@ function ActivityCard({
 
   return (
     <div
+      id={`activity-card-${activity.id}`}
       className={cn(
-        "card card-interactive activity-card animate-slide-up group flex items-center gap-3.5 sm:gap-4 p-3 sm:p-4 rounded-xl border border-[var(--slate-4)] hover:border-[var(--navy-6)] bg-white hover:bg-[var(--slate-1)] dark:bg-[var(--slate-2)] transition-all duration-150 cursor-pointer shadow-xs",
+        "card card-interactive activity-card animate-slide-up group flex items-center gap-3 sm:gap-4 p-3 sm:p-4 rounded-xl border border-[var(--slate-4)] hover:border-[var(--navy-6)] bg-white hover:bg-[var(--slate-1)] dark:bg-[var(--slate-2)] transition-all duration-150 cursor-pointer shadow-xs min-w-0 max-w-full overflow-hidden",
         isPast && "opacity-75 grayscale-[0.3]"
       )}
       style={{
@@ -1214,7 +1250,7 @@ function ActivityCard({
       {/* Date block */}
       <div
         className={cn(
-          "activity-card-date size-12 sm:size-14 rounded-xl flex flex-col items-center justify-center shrink-0 border transition-transform duration-150 group-hover:scale-105",
+          "activity-card-date size-11 sm:size-14 rounded-xl flex flex-col items-center justify-center shrink-0 border transition-transform duration-150 group-hover:scale-105",
           isActivityToday
             ? "bg-emerald-50 border-emerald-300 text-emerald-950 dark:bg-emerald-950/50 dark:border-emerald-700 dark:text-emerald-200"
             : isPast
@@ -1236,7 +1272,7 @@ function ActivityCard({
         </div>
         <div
           className={cn(
-            "text-lg sm:text-xl font-extrabold leading-none mt-1",
+            "text-base sm:text-xl font-extrabold leading-none mt-0.5 sm:mt-1",
             isActivityToday
               ? "text-emerald-950 dark:text-emerald-100"
               : isPast
@@ -1249,12 +1285,13 @@ function ActivityCard({
       </div>
 
       {/* Info */}
-      <div className="flex-1 min-w-0">
+      <div className="flex-1 min-w-0 overflow-hidden">
+        {/* Badges */}
         <div className="flex items-center gap-1.5 sm:gap-2 mb-1 flex-wrap">
           <Badge
             variant="outline"
             className={cn(
-              "h-5 px-2 text-[0.6875rem] font-bold uppercase border shadow-2xs",
+              "h-5 px-2 text-[0.6875rem] font-bold uppercase border shadow-2xs shrink-0",
               TYPE_COLOR_STYLES[activity.type] || TYPE_COLOR_STYLES.exercise,
               isPast && "opacity-70"
             )}
@@ -1262,40 +1299,33 @@ function ActivityCard({
             {TYPE_LABELS[activity.type] || 'Activity'}
           </Badge>
 
-          {isPast && (
-            <Badge
-              variant="secondary"
-              className="h-5 px-1.5 text-[0.625rem] font-bold uppercase text-slate-600 bg-slate-200/80 dark:bg-slate-800 dark:text-slate-400"
-            >
-              Past
-            </Badge>
-          )}
-
           {isAttending && (
             <Badge
               variant="outline"
-              className="h-5 px-1.5 text-[0.6875rem] font-bold border-emerald-300 bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300 gap-1"
+              className="h-5 px-1.5 text-[0.6875rem] font-bold border-emerald-300 bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300 gap-1 shrink-0"
             >
               <UserCheck size={11} strokeWidth={2.5} />
               {isPast ? 'Attended' : 'Attending'}
             </Badge>
           )}
-
-          <span
-            className={cn(
-              "font-semibold text-sm sm:text-[0.9375rem] text-slate-900 dark:text-slate-100 truncate flex-1 min-w-[120px]",
-              isCancelled && "line-through opacity-60"
-            )}
-            title={title}
-          >
-            {title}
-          </span>
         </div>
 
-        <div className="flex items-center gap-3 sm:gap-4 flex-wrap text-xs sm:text-[0.8125rem] text-slate-500 dark:text-slate-400">
+        {/* Title */}
+        <div
+          className={cn(
+            "font-semibold text-sm sm:text-[0.9375rem] text-slate-900 dark:text-slate-100 truncate mb-1 leading-snug w-full",
+            isCancelled && "line-through opacity-60"
+          )}
+          title={title}
+        >
+          {title}
+        </div>
+
+        {/* Metadata row */}
+        <div className="flex items-center gap-2.5 sm:gap-4 flex-wrap text-xs sm:text-[0.8125rem] text-slate-500 dark:text-slate-400 min-w-0">
           <div className="flex items-center gap-1.5 shrink-0">
-            <Clock size={13} className="text-slate-400" />
-            <span>
+            <Clock size={13} className="text-slate-400 shrink-0" />
+            <span className="whitespace-nowrap">
               {isSameDay(startDate, endDate)
                 ? `${format(startDate, 'HH:mm')} – ${format(endDate, 'HH:mm')}`
                 : `${format(startDate, 'MMM d, HH:mm')} – ${format(endDate, 'MMM d, HH:mm')}`}
@@ -1303,7 +1333,7 @@ function ActivityCard({
           </div>
 
           {location && (
-            <div className="flex items-center gap-1.5 min-w-0 max-w-[200px] sm:max-w-xs">
+            <div className="flex items-center gap-1.5 min-w-0 max-w-full sm:max-w-xs">
               <MapPin size={13} className="text-slate-400 shrink-0" />
               <span className="truncate">{location}</span>
             </div>
@@ -1311,8 +1341,8 @@ function ActivityCard({
 
           {activity.countAttendance !== undefined && activity.countAttendance > 0 && (
             <div className="flex items-center gap-1.5 shrink-0 text-slate-500 dark:text-slate-400">
-              <Users size={13} className="text-slate-400" />
-              <span>{activity.countAttendance} responding</span>
+              <Users size={13} className="text-slate-400 shrink-0" />
+              <span className="whitespace-nowrap">{activity.countAttendance} responding</span>
             </div>
           )}
         </div>
