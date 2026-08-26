@@ -713,6 +713,16 @@
   z-index: 10;
 }
 
+.calendar-event-pill.is-cancelled {
+  text-decoration: line-through;
+  opacity: 0.75;
+}
+
+.calendar-event-pill.is-cancelled:hover,
+.calendar-event-pill.is-cancelled.is-hovered {
+  opacity: 0.95;
+}
+
 .calendar-event-pill-exercise {
   background: var(--navy-1);
   color: var(--navy-9);
@@ -746,11 +756,26 @@
   background: var(--red-6);
 }
 
+/* ── Activity Details Page Layout & Mobile Normalization ── */
+.activity-details-main {
+  padding: 16px 16px 24px;
+}
+
+.activity-details-main.map-view-active {
+  padding: 16px 16px 0;
+}
+
 /* ── Activity Popover & Leaflet Map ──────────────────── */
 .popover-content {
+  outline: none;
   animation-duration: 200ms;
   animation-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
   will-change: transform, opacity;
+}
+
+.popover-content:focus,
+.popover-content:focus-visible {
+  outline: none;
 }
 
 .popover-content[data-state='open'] {
@@ -828,35 +853,50 @@
     padding: 14px 12px 28px !important;
   }
 
+  .activity-details-main {
+    padding: 12px 12px 24px !important;
+  }
+
+  .activity-details-main.map-view-active {
+    padding: 12px 12px 0 !important;
+  }
+
+  .activity-info-card,
+  .activity-info-desc-card,
+  .activity-info-view .card {
+    padding: 14px 16px !important;
+  }
+
+  .activity-details-topbar {
+    margin-bottom: 12px !important;
+    gap: 8px !important;
+  }
+
+  .form-controls-toolbar {
+    padding: 12px 14px !important;
+    margin-bottom: 14px !important;
+  }
+
   .dashboard-controls {
-    flex-direction: column !important;
-    align-items: stretch !important;
-    gap: 10px !important;
+    flex-direction: row !important;
+    align-items: center !important;
+    justifyContent: space-between !important;
+    gap: 8px !important;
   }
 
   .dashboard-switcher-row {
     display: flex !important;
     align-items: center !important;
-    justifyContent: space-between !important;
-    width: 100% !important;
+    width: auto !important;
     gap: 8px !important;
   }
 
   .dashboard-filter-row {
     display: flex !important;
     align-items: center !important;
-    overflow-x: auto !important;
-    -webkit-overflow-scrolling: touch !important;
-    width: 100% !important;
-    padding-bottom: 4px !important;
-  }
-
-  .dashboard-filter-row::-webkit-scrollbar {
-    display: none;
-  }
-
-  .activities-view-toggle {
-    display: none !important;
+    width: auto !important;
+    padding-bottom: 0 !important;
+    margin-left: auto !important;
   }
 
   .activity-card {
@@ -875,7 +915,19 @@
   }
 }
 
-/* ── Activity Info View Responsive Split Layout ─────── */
+/* ── Activity Info View Layouts ─────────────────────── */
+.activity-info-cards-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 20px;
+  align-items: stretch;
+}
+
+.activity-info-cards-row > .activity-info-card {
+  flex: 1 1 320px;
+  min-width: 280px;
+}
+
 .activity-info-split-container {
   display: flex;
   flex-direction: column;
@@ -903,6 +955,15 @@
     display: flex;
     flex-direction: column;
     gap: 20px;
+  }
+
+  /* In the 2-column split view, cards size naturally and independently in height */
+  .activity-info-split-container .activity-info-meta-col > .activity-info-card,
+  .activity-info-split-container .activity-info-desc-col > .activity-info-card {
+    flex: 0 0 auto;
+    width: 100%;
+    height: auto;
+    min-height: auto;
   }
 }
 

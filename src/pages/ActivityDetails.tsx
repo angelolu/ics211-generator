@@ -5,6 +5,7 @@ import * as Tooltip from '@radix-ui/react-tooltip';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
+import { cn } from '@/lib/utils';
 import {
   AlertTriangle,
   ArrowLeft,
@@ -577,11 +578,11 @@ export function ActivityDetails() {
         </header>
 
         <main
+          className={cn("activity-details-main", isMapView && "map-view-active")}
           style={{
             maxWidth: 1300,
             width: '100%',
             margin: '0 auto',
-            padding: '16px 16px 0',
             flex: isMapView ? 1 : undefined,
             display: isMapView ? 'flex' : undefined,
             flexDirection: isMapView ? 'column' : undefined,
@@ -594,7 +595,7 @@ export function ActivityDetails() {
         >
           {/* ── Top View & Action Bar ──────────────────────── */}
           <div
-            className="no-print"
+            className="activity-details-topbar no-print"
             style={{
               display: 'flex',
               alignItems: 'center',
@@ -1050,7 +1051,7 @@ export function ActivityDetails() {
               fallback={
                 <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: 400, gap: 16 }}>
                   <Loader2 size={36} style={{ color: 'var(--indigo-9)', animation: 'spin 1s linear infinite' }} />
-                  <p style={{ fontSize: '0.9375rem', color: 'var(--slate-10)', fontWeight: 500 }}>
+                  <p style={{ fontSize: '0.875rem', color: 'var(--slate-10)', fontWeight: 500 }}>
                     Loading Activity details…
                   </p>
                 </div>
@@ -1079,7 +1080,7 @@ export function ActivityDetails() {
                 fallback={
                   <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', minHeight: 400, gap: 16 }}>
                     <Loader2 size={36} style={{ color: 'var(--indigo-9)', animation: 'spin 1s linear infinite' }} />
-                    <p style={{ fontSize: '0.9375rem', color: 'var(--slate-10)', fontWeight: 500 }}>
+                    <p style={{ fontSize: '0.875rem', color: 'var(--slate-10)', fontWeight: 500 }}>
                       Loading Map View…
                     </p>
                   </div>
@@ -1104,7 +1105,7 @@ export function ActivityDetails() {
             <>
               {/* ── Form Controls Toolbar ──────────────────────── */}
               <div
-                className="card no-print"
+                className="card form-controls-toolbar no-print"
                 style={{
                   padding: '14px 20px',
                   marginBottom: 20,
@@ -1116,7 +1117,7 @@ export function ActivityDetails() {
                 <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 16 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                     <FileText size={16} style={{ color: 'var(--slate-9)' }} />
-                    <span style={{ fontWeight: 600, fontSize: '0.9375rem', color: 'var(--slate-12)' }}>
+                    <span style={{ fontWeight: 600, fontSize: '0.875rem', color: 'var(--slate-12)' }}>
                       Form Builder
                     </span>
                   </div>
@@ -1313,7 +1314,7 @@ export function ActivityDetails() {
               {isLoading ? (
                 <div className="no-print" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: 300, gap: 16 }}>
                   <Loader2 size={36} style={{ color: 'var(--indigo-9)', animation: 'spin 1s linear infinite' }} />
-                  <p style={{ fontSize: '0.9375rem', color: 'var(--slate-10)', fontWeight: 500 }}>
+                  <p style={{ fontSize: '0.875rem', color: 'var(--slate-10)', fontWeight: 500 }}>
                     Loading roster data…
                   </p>
                 </div>

@@ -1,5 +1,5 @@
 import React from 'react';
-import * as HoverCard from '@radix-ui/react-hover-card';
+import * as Popover from '@radix-ui/react-popover';
 import { Badge } from '@/components/ui/badge';
 import { buttonVariants } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
@@ -35,6 +35,43 @@ export const MemberPopover: React.FC<MemberPopoverProps> = ({
   isLocal = false,
   children,
 }) => {
+  const [open, setOpen] = React.useState(false);
+  const openTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const closeTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearTimers = React.useCallback(() => {
+    if (openTimerRef.current) clearTimeout(openTimerRef.current);
+    if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
+  }, []);
+
+  React.useEffect(() => {
+    return () => clearTimers();
+  }, [clearTimers]);
+
+  const handleMouseEnter = () => {
+    if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
+    openTimerRef.current = setTimeout(() => {
+      setOpen(true);
+    }, 250);
+  };
+
+  const handleMouseLeave = () => {
+    if (openTimerRef.current) clearTimeout(openTimerRef.current);
+    closeTimerRef.current = setTimeout(() => {
+      setOpen(false);
+    }, 150);
+  };
+
+  const handleContentMouseEnter = () => {
+    if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
+  };
+
+  const handleTriggerClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    clearTimers();
+    setOpen((prev) => !prev);
+  };
+
   const memberId = member?.id || attendee?.member?.id;
 
   const effectiveMember = React.useMemo(() => {
@@ -116,17 +153,49 @@ export const MemberPopover: React.FC<MemberPopoverProps> = ({
 
   const d4hUrl = !isLocal && memberId ? getD4HMemberUrl(memberId) : null;
 
+  const triggerElement = React.isValidElement(children) ? (
+    React.cloneElement(children as React.ReactElement<any>, {
+      onClick: (e: React.MouseEvent) => {
+        (children as React.ReactElement<any>).props?.onClick?.(e);
+        handleTriggerClick(e);
+      },
+      onMouseEnter: (e: React.MouseEvent) => {
+        (children as React.ReactElement<any>).props?.onMouseEnter?.(e);
+        handleMouseEnter();
+      },
+      onMouseLeave: (e: React.MouseEvent) => {
+        (children as React.ReactElement<any>).props?.onMouseLeave?.(e);
+        handleMouseLeave();
+      },
+    })
+  ) : (
+    <div
+      onClick={handleTriggerClick}
+      onMouseEnter={handleMouseEnter}
+      onMouseLeave={handleMouseLeave}
+      style={{ cursor: 'pointer' }}
+    >
+      {children}
+    </div>
+  );
+
   return (
-    <HoverCard.Root openDelay={400} closeDelay={150}>
-      <HoverCard.Trigger asChild>
-        {children}
-      </HoverCard.Trigger>
-      <HoverCard.Portal>
-        <HoverCard.Content
+    <Popover.Root open={open} onOpenChange={setOpen}>
+      <Popover.Trigger asChild>
+        {triggerElement}
+      </Popover.Trigger>
+      <Popover.Portal>
+        <Popover.Content
           className="popover-content"
           side="top"
           align="center"
           sideOffset={8}
+          onMouseEnter={handleContentMouseEnter}
+          onMouseLeave={handleMouseLeave}
+          onInteractOutside={() => {
+            clearTimers();
+            setOpen(false);
+          }}
           style={{
             width: 270,
             maxWidth: '90vw',
@@ -135,6 +204,7 @@ export const MemberPopover: React.FC<MemberPopoverProps> = ({
             border: '1px solid var(--slate-4)',
             boxShadow: '0 12px 32px -4px rgba(6,27,68,0.18), 0 4px 12px rgba(6,27,68,0.08)',
             padding: 14,
+            outline: 'none',
             zIndex: 1000,
             display: 'flex',
             flexDirection: 'column',
@@ -355,9 +425,10 @@ export const MemberPopover: React.FC<MemberPopoverProps> = ({
             )}
           </div>
 
-          <HoverCard.Arrow style={{ fill: 'white' }} />
-        </HoverCard.Content>
-      </HoverCard.Portal>
-    </HoverCard.Root>
+          <Popover.Arrow style={{ fill: 'white' }} />
+        </Popover.Content>
+      </Popover.Portal>
+    </Popover.Root>
   );
 };
+

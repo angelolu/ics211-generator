@@ -1805,9 +1805,7 @@ export const ActivityMapView = React.forwardRef<ActivityMapViewRef, ActivityMapV
     const driver = plottedMembers.find((m) => m.memberId === carpool.driverId);
     const label = driver ? `${driver.name}'s carpool` : carpool.name || 'Carpool';
 
-    toast.success(`${label} accepted`, {
-      description: 'View this carpool in the Overview tab',
-    });
+    toast(`${label} accepted`);
   };
 
   // Open modal to modify a suggested or active carpool
@@ -1876,9 +1874,7 @@ export const ActivityMapView = React.forwardRef<ActivityMapViewRef, ActivityMapV
     // Show notification toast if user creates/updates carpool while not on Overview tab
     if (viewMode !== 'overview') {
       const label = `${driver.name}'s carpool`;
-      toast.success(editingCarpoolId ? `${label} updated` : `${label} created`, {
-        description: 'View this carpool in the Overview tab',
-      });
+      toast(editingCarpoolId ? `${label} updated` : `${label} created`);
     }
   };
 
@@ -2131,14 +2127,19 @@ export const ActivityMapView = React.forwardRef<ActivityMapViewRef, ActivityMapV
                 </TabsTrigger>
                 <TabsTrigger value="suggestions" className="text-xs font-semibold py-1">
                   <span>Carpool Suggestions</span>
-                  {suggestedCarpools.length > 0 && (
+                  {isCalculatingCarpools || isCalculatingRoutes ? (
+                    <span
+                      className="skeleton h-4 w-5 rounded-full inline-block ml-1.5 align-middle"
+                      title="Searching carpool suggestions..."
+                    />
+                  ) : suggestedCarpools.length > 0 ? (
                     <Badge
                       variant="secondary"
                       className="h-4 px-1.5 text-[0.625rem] font-bold bg-teal-100 text-teal-800 border-teal-200 dark:bg-teal-950/50 dark:text-teal-300 ml-1.5"
                     >
                       {suggestedCarpools.length}
                     </Badge>
-                  )}
+                  ) : null}
                 </TabsTrigger>
               </TabsList>
             </Tabs>
@@ -2610,9 +2611,18 @@ export const ActivityMapView = React.forwardRef<ActivityMapViewRef, ActivityMapV
             {viewMode === 'suggestions' && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid var(--slate-3)', paddingBottom: 6 }}>
-                  <span style={{ fontSize: '0.8125rem', fontWeight: 600, color: 'var(--slate-12)' }}>
-                    Suggestions ({suggestedCarpools.length})
-                  </span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ fontSize: '0.8125rem', fontWeight: 600, color: 'var(--slate-12)' }}>
+                      Suggestions
+                    </span>
+                    {isCalculatingCarpools || isCalculatingRoutes ? (
+                      <span className="skeleton h-4 w-6 rounded-full inline-block" title="Calculating carpools..." />
+                    ) : (
+                      <span style={{ fontSize: '0.8125rem', fontWeight: 600, color: 'var(--slate-10)' }}>
+                        ({suggestedCarpools.length})
+                      </span>
+                    )}
+                  </div>
                 </div>
 
                 {/* Tuning Parameters */}
@@ -2678,7 +2688,14 @@ export const ActivityMapView = React.forwardRef<ActivityMapViewRef, ActivityMapV
                   </div>
                 </div>
 
-                {suggestedCarpools.length === 0 && (
+                {(isCalculatingCarpools || isCalculatingRoutes) && suggestedCarpools.length === 0 && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '4px 0' }}>
+                    <div className="skeleton" style={{ height: 60, borderRadius: 8 }} />
+                    <div className="skeleton" style={{ height: 60, borderRadius: 8, opacity: 0.7 }} />
+                  </div>
+                )}
+
+                {!(isCalculatingCarpools || isCalculatingRoutes) && suggestedCarpools.length === 0 && (
                   <div style={{ fontSize: '0.75rem', color: 'var(--slate-8)', padding: '12px 0', textAlign: 'center' }}>
                     No suggested carpools for remaining unassigned members.
                   </div>

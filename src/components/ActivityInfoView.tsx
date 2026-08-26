@@ -662,7 +662,7 @@ export const ActivityInfoView: React.FC<ActivityInfoViewProps> = ({
   const isLongDesc = Boolean(cleanedDesc && cleanedDesc.trim().length > 150);
 
   const renderDateAndConditionsCard = () => (
-    <div className="card" style={{ flex: '1 1 320px', minWidth: 280, padding: '22px 24px', display: 'flex', flexDirection: 'column', gap: 16 }}>
+    <div className="card activity-info-card" style={{ padding: '22px 24px', display: 'flex', flexDirection: 'column', gap: 16 }}>
       {/* Card header */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingBottom: 12, borderBottom: '1px solid var(--slate-3)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -726,7 +726,7 @@ export const ActivityInfoView: React.FC<ActivityInfoViewProps> = ({
       : '';
 
     return (
-      <div className="card" style={{ flex: '1 1 320px', minWidth: 280, padding: '22px 24px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <div className="card activity-info-card" style={{ padding: '22px 24px', display: 'flex', flexDirection: 'column', gap: 14 }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingBottom: 12, borderBottom: '1px solid var(--slate-3)' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <MapPin size={18} style={{ color: 'var(--navy-7)' }} />
@@ -747,7 +747,7 @@ export const ActivityInfoView: React.FC<ActivityInfoViewProps> = ({
         </div>
 
         <div>
-          <div style={{ fontSize: '0.9375rem', fontWeight: 600, color: 'var(--slate-12)' }}>
+          <div style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--slate-12)' }}>
             {streetAddress ? (
               streetAddress
             ) : lat != null && lng != null ? (
@@ -835,7 +835,7 @@ export const ActivityInfoView: React.FC<ActivityInfoViewProps> = ({
     const hasMultiOpNotice = Boolean(opPeriodText);
 
     return (
-      <div className="card activity-info-desc-card" style={{ flex: '1 1 320px', minWidth: 280, padding: '22px 26px' }}>
+      <div className="card activity-info-card activity-info-desc-card" style={{ padding: '22px 26px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingBottom: 12, borderBottom: '1px solid var(--slate-3)', marginBottom: 14 }}>
           <Info size={18} style={{ color: 'var(--navy-7)' }} />
           <h2 style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--slate-12)', margin: 0 }}>
@@ -846,9 +846,9 @@ export const ActivityInfoView: React.FC<ActivityInfoViewProps> = ({
           <div
             className="activity-info-desc-content"
             style={{
-              fontSize: '0.9375rem',
+              fontSize: '0.875rem',
               color: 'var(--slate-11)',
-              lineHeight: 1.65,
+              lineHeight: 1.5,
               whiteSpace: 'pre-wrap',
             }}
           >
@@ -868,109 +868,74 @@ export const ActivityInfoView: React.FC<ActivityInfoViewProps> = ({
               />
             )}
             <div
+              className="op-period-nav-row"
               style={{
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'space-between',
-                gap: 12,
+                gap: 8,
                 width: '100%',
               }}
             >
-              {/* Left Slot: Previous Day button (or dummy placeholder to keep center balanced) */}
-              <div style={{ flex: 1, display: 'flex', justifyContent: 'flex-start', minWidth: 0 }}>
+              {/* Left Slot: Previous Day button */}
+              <div style={{ flex: '0 0 auto', display: 'flex', justifyContent: 'flex-start' }}>
                 {hasYesterdayOp && adjacentOps.yesterdayActivity ? (
-                  <button
+                  <Button
+                    variant="ghost"
+                    size="sm"
                     onClick={() =>
                       navigate(`/exercise/${adjacentOps.yesterdayActivity!.id}`, {
                         state: { exercise: adjacentOps.yesterdayActivity },
                       })
                     }
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: 5,
-                      fontSize: '0.8125rem',
-                      fontWeight: 500,
-                      color: 'var(--slate-11)',
-                      background: 'transparent',
-                      border: 'none',
-                      padding: '4px 8px',
-                      borderRadius: 6,
-                      cursor: 'pointer',
-                      whiteSpace: 'nowrap',
-                      transition: 'all 0.15s ease',
-                    }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.background = 'var(--slate-3)';
-                      e.currentTarget.style.color = 'var(--slate-12)';
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.background = 'transparent';
-                      e.currentTarget.style.color = 'var(--slate-11)';
-                    }}
+                    className="h-8 px-2 sm:px-2.5 gap-1.5 text-xs font-semibold text-slate-700 hover:text-slate-900 dark:text-slate-300 shrink-0"
                     title="Navigate to previous day's operational period"
+                    aria-label="Previous day operational period"
                   >
-                    <ArrowLeft size={13} />
-                    <span>Previous Day</span>
-                  </button>
+                    <ArrowLeft size={14} />
+                    <span className="hidden sm:inline">Previous Day</span>
+                  </Button>
                 ) : (
-                  <div style={{ visibility: 'hidden', width: 1 }} aria-hidden="true" />
+                  <div style={{ visibility: 'hidden', width: 32 }} aria-hidden="true" />
                 )}
               </div>
 
-              {/* Center Slot: Status text (always strictly centered in the card) */}
+              {/* Center Slot: Status text (strictly centered without overlapping) */}
               <div
                 style={{
+                  flex: 1,
                   fontSize: '0.8125rem',
-                  color: 'var(--slate-9)',
-                  fontWeight: 400,
+                  color: 'var(--slate-10)',
+                  fontWeight: 500,
                   textAlign: 'center',
-                  padding: '0 8px',
-                  lineHeight: 1.4,
+                  padding: '0 4px',
+                  lineHeight: 1.35,
+                  minWidth: 0,
                 }}
               >
                 {opPeriodText}
               </div>
 
-              {/* Right Slot: Next Day button (or dummy placeholder to keep center balanced) */}
-              <div style={{ flex: 1, display: 'flex', justifyContent: 'flex-end', minWidth: 0 }}>
+              {/* Right Slot: Next Day button */}
+              <div style={{ flex: '0 0 auto', display: 'flex', justifyContent: 'flex-end' }}>
                 {hasTomorrowOp && adjacentOps.tomorrowActivity ? (
-                  <button
+                  <Button
+                    variant="ghost"
+                    size="sm"
                     onClick={() =>
                       navigate(`/exercise/${adjacentOps.tomorrowActivity!.id}`, {
                         state: { exercise: adjacentOps.tomorrowActivity },
                       })
                     }
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: 5,
-                      fontSize: '0.8125rem',
-                      fontWeight: 500,
-                      color: 'var(--slate-11)',
-                      background: 'transparent',
-                      border: 'none',
-                      padding: '4px 8px',
-                      borderRadius: 6,
-                      cursor: 'pointer',
-                      whiteSpace: 'nowrap',
-                      transition: 'all 0.15s ease',
-                    }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.background = 'var(--slate-3)';
-                      e.currentTarget.style.color = 'var(--slate-12)';
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.background = 'transparent';
-                      e.currentTarget.style.color = 'var(--slate-11)';
-                    }}
+                    className="h-8 px-2 sm:px-2.5 gap-1.5 text-xs font-semibold text-slate-700 hover:text-slate-900 dark:text-slate-300 shrink-0"
                     title="Navigate to following day's operational period"
+                    aria-label="Next day operational period"
                   >
-                    <span>Next Day</span>
-                    <ArrowRight size={13} />
-                  </button>
+                    <span className="hidden sm:inline">Next Day</span>
+                    <ArrowRight size={14} />
+                  </Button>
                 ) : (
-                  <div style={{ visibility: 'hidden', width: 1 }} aria-hidden="true" />
+                  <div style={{ visibility: 'hidden', width: 32 }} aria-hidden="true" />
                 )}
               </div>
             </div>
@@ -981,7 +946,7 @@ export const ActivityInfoView: React.FC<ActivityInfoViewProps> = ({
   };
 
   const renderPersonnelCard = () => (
-    <div className="card" style={{ padding: '22px 26px' }}>
+    <div className="card activity-info-card" style={{ padding: '22px 26px' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingBottom: 14, borderBottom: '1px solid var(--slate-3)', marginBottom: 16 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <Users size={18} style={{ color: 'var(--navy-7)' }} />
@@ -1126,7 +1091,6 @@ export const ActivityInfoView: React.FC<ActivityInfoViewProps> = ({
       activity={activity}
       activityType={activityType}
       isLocal={isLocal}
-      style={{ flex: '1 1 320px', minWidth: 280 }}
     />
   );
 
@@ -1151,14 +1115,7 @@ export const ActivityInfoView: React.FC<ActivityInfoViewProps> = ({
       ) : (
         /* ── Standard Flex Layout (<=150 char description or none) ──── */
         <>
-          <div
-            style={{
-              display: 'flex',
-              flexWrap: 'wrap',
-              gap: 20,
-              alignItems: 'stretch',
-            }}
-          >
+          <div className="activity-info-cards-row">
             {renderDateAndConditionsCard()}
             {renderLocationCard()}
             {renderAttachmentsCard()}

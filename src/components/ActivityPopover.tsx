@@ -1,5 +1,5 @@
 import React from 'react';
-import * as HoverCard from '@radix-ui/react-hover-card';
+import * as Popover from '@radix-ui/react-popover';
 import { Badge } from '@/components/ui/badge';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
@@ -65,6 +65,43 @@ export const ActivityPopover: React.FC<ActivityPopoverProps> = ({
   children,
   onOpenRoster,
 }) => {
+  const [open, setOpen] = React.useState(false);
+  const openTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const closeTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearTimers = React.useCallback(() => {
+    if (openTimerRef.current) clearTimeout(openTimerRef.current);
+    if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
+  }, []);
+
+  React.useEffect(() => {
+    return () => clearTimers();
+  }, [clearTimers]);
+
+  const handleMouseEnter = () => {
+    if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
+    openTimerRef.current = setTimeout(() => {
+      setOpen(true);
+    }, 350);
+  };
+
+  const handleMouseLeave = () => {
+    if (openTimerRef.current) clearTimeout(openTimerRef.current);
+    closeTimerRef.current = setTimeout(() => {
+      setOpen(false);
+    }, 150);
+  };
+
+  const handleContentMouseEnter = () => {
+    if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
+  };
+
+  const handleTriggerClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    clearTimers();
+    setOpen((prev) => !prev);
+  };
+
   const startDate = new Date(activity.startsAt);
   const endDate = activity.endsAt ? new Date(activity.endsAt) : startDate;
   const isMultiDay = !isNaN(startDate.getTime()) && !isNaN(endDate.getTime()) && !isSameDay(startDate, endDate);
@@ -91,17 +128,49 @@ export const ActivityPopover: React.FC<ActivityPopoverProps> = ({
   const d4hUrl = getD4HActivityUrl(activity.id, activity.type);
   const cleanedDesc = cleanDescription(activity.description);
 
+  const triggerElement = React.isValidElement(children) ? (
+    React.cloneElement(children as React.ReactElement<any>, {
+      onClick: (e: React.MouseEvent) => {
+        (children as React.ReactElement<any>).props?.onClick?.(e);
+        handleTriggerClick(e);
+      },
+      onMouseEnter: (e: React.MouseEvent) => {
+        (children as React.ReactElement<any>).props?.onMouseEnter?.(e);
+        handleMouseEnter();
+      },
+      onMouseLeave: (e: React.MouseEvent) => {
+        (children as React.ReactElement<any>).props?.onMouseLeave?.(e);
+        handleMouseLeave();
+      },
+    })
+  ) : (
+    <div
+      onClick={handleTriggerClick}
+      onMouseEnter={handleMouseEnter}
+      onMouseLeave={handleMouseLeave}
+      style={{ cursor: 'pointer' }}
+    >
+      {children}
+    </div>
+  );
+
   return (
-    <HoverCard.Root openDelay={500} closeDelay={150}>
-      <HoverCard.Trigger asChild>
-        {children}
-      </HoverCard.Trigger>
-      <HoverCard.Portal>
-        <HoverCard.Content
+    <Popover.Root open={open} onOpenChange={setOpen}>
+      <Popover.Trigger asChild>
+        {triggerElement}
+      </Popover.Trigger>
+      <Popover.Portal>
+        <Popover.Content
           className="popover-content"
           side="top"
           align="center"
           sideOffset={8}
+          onMouseEnter={handleContentMouseEnter}
+          onMouseLeave={handleMouseLeave}
+          onInteractOutside={() => {
+            clearTimers();
+            setOpen(false);
+          }}
           style={{
             width: 320,
             maxWidth: '90vw',
@@ -110,6 +179,7 @@ export const ActivityPopover: React.FC<ActivityPopoverProps> = ({
             border: '1px solid var(--slate-4)',
             boxShadow: '0 12px 32px -4px rgba(6,27,68,0.18), 0 4px 12px rgba(6,27,68,0.08)',
             padding: 16,
+            outline: 'none',
             zIndex: 1000,
             display: 'flex',
             flexDirection: 'column',
@@ -131,18 +201,10 @@ export const ActivityPopover: React.FC<ActivityPopoverProps> = ({
               >
                 {TYPE_LABELS[activity.type] || 'Activity'}
               </Badge>
-              {activity.reference && (
-                <Badge
-                  variant="outline"
-                  className="h-5.5 px-2 text-[0.6875rem] font-bold font-mono tracking-wider text-slate-700 bg-slate-100/70 border-slate-300 dark:text-slate-300 dark:bg-slate-800"
-                >
-                  #{activity.reference}
-                </Badge>
-              )}
               {isAttending && (
                 <Badge
                   variant="outline"
-                  className="h-5.5 px-2 text-[0.6875rem] font-bold border-emerald-300 bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300 gap-1"
+                  className="h-5 px-1.5 text-[0.6875rem] font-bold border-emerald-300 bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300 gap-1"
                 >
                   <UserCheck size={11} strokeWidth={2.5} />
                   {isPast ? 'Attended' : 'Attending'}
@@ -154,7 +216,7 @@ export const ActivityPopover: React.FC<ActivityPopoverProps> = ({
           {/* Title */}
           <div>
             <h4 style={{
-              fontSize: '0.9375rem',
+              fontSize: '0.875rem',
               fontWeight: 700,
               color: 'var(--slate-12)',
               margin: 0,
@@ -221,6 +283,8 @@ export const ActivityPopover: React.FC<ActivityPopoverProps> = ({
               className="flex-2 h-8 text-xs font-semibold gap-1.5"
               onClick={(e) => {
                 e.stopPropagation();
+                clearTimers();
+                setOpen(false);
                 onOpenRoster(activity);
               }}
             >
@@ -246,9 +310,10 @@ export const ActivityPopover: React.FC<ActivityPopoverProps> = ({
             )}
           </div>
 
-          <HoverCard.Arrow style={{ fill: 'white' }} />
-        </HoverCard.Content>
-      </HoverCard.Portal>
-    </HoverCard.Root>
+          <Popover.Arrow style={{ fill: 'white' }} />
+        </Popover.Content>
+      </Popover.Portal>
+    </Popover.Root>
   );
 };
+

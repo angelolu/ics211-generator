@@ -3,6 +3,7 @@ import * as Tooltip from '@radix-ui/react-tooltip';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Button } from '@/components/ui/button';
+import { cn } from '@/lib/utils';
 import {
   addMonths,
   differenceInCalendarDays,
@@ -22,9 +23,11 @@ import {
 import {
   Activity as ActivityIcon,
   Calendar,
+  Check,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  Clock,
   ExternalLink,
   Layers,
   List,
@@ -56,24 +59,87 @@ const TYPE_LABELS: Record<string, string> = {
   incident: 'Incident',
 };
 
-export const TYPE_COLOR_STYLES: Record<string, string> = {
-  all: 'bg-slate-100 text-slate-700 border-slate-300 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700',
-  exercise: 'bg-sky-50 text-sky-800 border-sky-200 dark:bg-sky-950/50 dark:text-sky-300 dark:border-sky-800',
-  event: 'bg-teal-50 text-teal-800 border-teal-200 dark:bg-teal-950/50 dark:text-teal-300 dark:border-teal-800',
-  incident: 'bg-red-50 text-red-800 border-red-200 dark:bg-red-950/50 dark:text-red-300 dark:border-red-800',
-  local: 'bg-slate-100 text-slate-700 border-slate-300 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700',
+const TYPE_COLOR_STYLES: Record<string, string> = {
+  all: 'border-slate-300 text-slate-700 bg-slate-100 dark:border-slate-700 dark:text-slate-300 dark:bg-slate-800',
+  exercise: 'border-sky-300 text-sky-800 bg-sky-50 dark:border-sky-800 dark:text-sky-300 dark:bg-sky-950/40',
+  event: 'border-teal-300 text-teal-800 bg-teal-50 dark:border-teal-800 dark:text-teal-300 dark:bg-teal-950/40',
+  incident: 'border-red-300 text-red-800 bg-red-50 dark:border-red-800 dark:text-red-300 dark:bg-red-950/40',
 };
+
+function getMonthQueryOptions(month: Date) {
+  const gridStart = startOfWeek(startOfMonth(month));
+  const gridEnd = endOfWeek(endOfMonth(month));
+  return {
+    startsAfter: subMonths(gridStart, 1).toISOString(),
+    startsBefore: gridEnd.toISOString(),
+  };
+}
+
+// Persists selected month during SPA session navigation, resets on full page reload
+let sessionSelectedMonth: Date | null = null;
+
+interface MonthSwitcherBarProps {
+  currentMonth: Date;
+  onMonthChange: (newMonth: Date) => void;
+}
+
+function MonthSwitcherBar({ currentMonth, onMonthChange }: MonthSwitcherBarProps) {
+  const isCurrentMonth = isSameMonth(currentMonth, new Date());
+
+  return (
+    <div className="sticky top-0 z-20 -mx-4 sm:mx-0 px-4 sm:px-3 py-1.5 mb-3 bg-white/90 dark:bg-slate-900/90 backdrop-blur-md border-y sm:border sm:rounded-xl border-slate-200 dark:border-slate-800 shadow-2xs">
+      <div className="flex items-center justify-between gap-3">
+        {/* Navigation Buttons + Month Label + Today Jump */}
+        <div className="flex items-center gap-4">
+          <div className="flex items-center gap-0.5 sm:gap-1">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => onMonthChange(subMonths(currentMonth, 1))}
+              title="Previous Month"
+              className="size-7 p-0 rounded-lg"
+            >
+              <ChevronLeft size={15} />
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => onMonthChange(addMonths(currentMonth, 1))}
+              title="Next Month"
+              className="size-7 p-0 rounded-lg"
+            >
+              <ChevronRight size={15} />
+            </Button>
+          </div>
+
+          <span className="text-sm sm:text-base font-bold text-slate-900 dark:text-slate-100 tracking-tight whitespace-nowrap">
+            {format(currentMonth, 'MMMM yyyy')}
+          </span>
+
+          {!isCurrentMonth && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => onMonthChange(new Date())}
+              className="h-7 px-2.5 text-xs font-semibold rounded-md shadow-2xs"
+            >
+              Today
+            </Button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export function Dashboard() {
   useDocumentTitle('Dashboard');
   const [activities, setActivities] = useState<Activity[]>([]);
-  const [filter, setFilter] = useState<FilterType>('all');
   const [isLoading, setIsLoading] = useState(true);
+  const [filter, setFilter] = useState<FilterType>('all');
   const [error, setError] = useState('');
-  const [currentPage, setCurrentPage] = useState(1);
   const navigate = useNavigate();
 
-  const ITEMS_PER_PAGE = 12;
   const teamTitle = localStorage.getItem('d4h_team_title') || 'Your Team';
   const [localRosters, setLocalRosters] = useState<LocalRoster[]>(() => {
     try {
@@ -91,9 +157,24 @@ export function Dashboard() {
     return (saved === 'activities' || saved === 'local') ? saved : 'activities';
   });
   const [activitiesView, setActivitiesView] = useState<'list' | 'calendar'>('calendar');
-  const effectiveActivitiesView = activitiesView;
-  const [currentMonth, setCurrentMonth] = useState<Date>(new Date());
+  const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' && window.innerWidth < 640);
+
+  useEffect(() => {
+    const handleResize = () => {
+      setIsMobile(window.innerWidth < 640);
+    };
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  const effectiveActivitiesView = isMobile ? 'list' : activitiesView;
+  const [currentMonth, setCurrentMonth] = useState<Date>(() => sessionSelectedMonth || new Date());
   const [attendingActivityIds, setAttendingActivityIds] = useState<Set<number>>(new Set());
+
+  const handleMonthChange = (newMonth: Date) => {
+    sessionSelectedMonth = newMonth;
+    setCurrentMonth(newMonth);
+  };
 
   const loadLocalRosters = () => {
     try {
@@ -139,7 +220,7 @@ export function Dashboard() {
     }
   };
 
-  const load = async (quiet = false, targetView = activitiesView, targetMonth = currentMonth) => {
+  const load = async (quiet = false, targetMonth = currentMonth) => {
     if (!contextId) {
       setIsLoading(false);
       return;
@@ -147,17 +228,7 @@ export function Dashboard() {
     if (!quiet) setIsLoading(true);
     setError('');
     try {
-      let options: { startsAfter?: string; startsBefore?: string } | undefined = undefined;
-
-      if (targetView === 'calendar') {
-        const gridStart = startOfWeek(startOfMonth(targetMonth));
-        const gridEnd = endOfWeek(endOfMonth(targetMonth));
-        options = {
-          startsAfter: subMonths(gridStart, 1).toISOString(),
-          startsBefore: gridEnd.toISOString(),
-        };
-      }
-
+      const options = getMonthQueryOptions(targetMonth);
       const contextIdNum = parseInt(contextId, 10);
       const data = await getActivities(contextIdNum, options);
       setActivities(data);
@@ -182,62 +253,71 @@ export function Dashboard() {
     }
   };
 
-  useEffect(() => { load(false, activitiesView, currentMonth); }, [contextId, activitiesView, currentMonth]);
+  useEffect(() => { load(false, currentMonth); }, [contextId, currentMonth]);
 
   useEffect(() => {
     const handleWindowFocus = () => {
       if (contextId) {
-        load(true, activitiesView, currentMonth);
+        load(true, currentMonth);
       }
       loadLocalRosters();
     };
     window.addEventListener('focus', handleWindowFocus);
     return () => window.removeEventListener('focus', handleWindowFocus);
-  }, [contextId, activitiesView, currentMonth]);
+  }, [contextId, currentMonth]);
 
   useEffect(() => {
     const interval = setInterval(() => {
       if (contextId) {
-        load(true, activitiesView, currentMonth);
+        load(true, currentMonth);
       }
     }, 5 * 60 * 1000);
     return () => clearInterval(interval);
-  }, [contextId, activitiesView, currentMonth]);
+  }, [contextId, currentMonth]);
 
   const viewActivities = useMemo(() => {
-    if (effectiveActivitiesView === 'calendar') {
-      const gridStart = startOfWeek(startOfMonth(currentMonth));
-      const gridEnd = endOfWeek(endOfMonth(currentMonth));
-      return activities.filter(a => {
-        const rawStart = new Date(a.startsAt);
-        const rawEnd = a.endsAt ? new Date(a.endsAt) : rawStart;
-        const start = isNaN(rawStart.getTime()) ? new Date() : rawStart;
-        let end = isNaN(rawEnd.getTime()) || rawEnd < start ? start : rawEnd;
-        const startDay = startOfDay(start);
-        let endDay = startOfDay(end);
-        if (
-          end.getHours() === 0 &&
-          end.getMinutes() === 0 &&
-          end.getSeconds() === 0 &&
-          !isSameDay(start, end)
-        ) {
-          endDay = subDays(endDay, 1);
-        }
-        if (endDay < startDay) {
-          endDay = startDay;
-        }
+    const monthStart = startOfMonth(currentMonth);
+    const monthEnd = endOfMonth(currentMonth);
+    const gridStart = startOfWeek(monthStart);
+    const gridEnd = endOfWeek(monthEnd);
+
+    const list = activities.filter(a => {
+      const rawStart = new Date(a.startsAt);
+      const rawEnd = a.endsAt ? new Date(a.endsAt) : rawStart;
+      const start = isNaN(rawStart.getTime()) ? new Date() : rawStart;
+      const end = isNaN(rawEnd.getTime()) || rawEnd < start ? start : rawEnd;
+      const startDay = startOfDay(start);
+      let endDay = startOfDay(end);
+      if (
+        end.getHours() === 0 &&
+        end.getMinutes() === 0 &&
+        end.getSeconds() === 0 &&
+        !isSameDay(start, end)
+      ) {
+        endDay = subDays(endDay, 1);
+      }
+      if (endDay < startDay) {
+        endDay = startDay;
+      }
+      if (effectiveActivitiesView === 'calendar') {
         return startDay <= gridEnd && endDay >= gridStart;
-      });
-    }
-    return activities;
+      }
+      return startDay <= monthEnd && endDay >= monthStart;
+    });
+
+    // Chronological ascending (earliest in month first)
+    list.sort((a, b) => {
+      const aTime = new Date(a.startsAt).getTime() || 0;
+      const bTime = new Date(b.startsAt).getTime() || 0;
+      return aTime - bTime;
+    });
+
+    return list;
   }, [activities, effectiveActivitiesView, currentMonth]);
 
   const filtered = useMemo(() => {
     return viewActivities.filter(a => filter === 'all' || a.type === filter);
   }, [viewActivities, filter]);
-
-  const totalPages = Math.ceil(filtered.length / ITEMS_PER_PAGE);
-  const paginated = filtered.slice((currentPage - 1) * ITEMS_PER_PAGE, currentPage * ITEMS_PER_PAGE);
 
   const counts = useMemo(() => {
     return {
@@ -396,10 +476,10 @@ export function Dashboard() {
                   onValueChange={(v) => { if (v) setViewMode(v as 'activities' | 'local'); }}
                 >
                   <TabsList>
-                    <TabsTrigger value="activities">
+                    <TabsTrigger value="activities" className="text-xs px-3 font-semibold">
                       D4H Activities
                     </TabsTrigger>
-                    <TabsTrigger value="local">
+                    <TabsTrigger value="local" className="text-xs px-3 font-semibold">
                       Locally Stored
                     </TabsTrigger>
                   </TabsList>
@@ -412,33 +492,37 @@ export function Dashboard() {
             </div>
 
             {viewMode === 'activities' ? (
-              <div className="dashboard-filter-row" style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 12 }}>
+              <div className="dashboard-filter-row" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                {/* Calendar / List View Switcher (Desktop/Tablet Only) */}
                 <Tabs
                   value={activitiesView}
                   onValueChange={(v) => { if (v) setActivitiesView(v as 'list' | 'calendar'); }}
+                  className="hidden sm:inline-flex"
                 >
                   <TabsList>
-                    <TabsTrigger value="calendar" className="gap-1.5">
-                      <Calendar size={14} />
+                    <TabsTrigger value="calendar" className="gap-1.5 text-xs px-3 font-semibold">
+                      <Calendar size={13} />
                       <span>Calendar</span>
                     </TabsTrigger>
-                    <TabsTrigger value="list" className="gap-1.5">
-                      <List size={14} />
+                    <TabsTrigger value="list" className="gap-1.5 text-xs px-3 font-semibold">
+                      <List size={13} />
                       <span>List</span>
                     </TabsTrigger>
                   </TabsList>
                 </Tabs>
 
+                {/* Filter Tabs (Desktop/Tablet) */}
                 <Tabs
                   value={filter}
-                  onValueChange={(v) => { if (v) { setFilter(v as FilterType); setCurrentPage(1); } }}
+                  onValueChange={(v) => { if (v) setFilter(v as FilterType); }}
+                  className="hidden sm:inline-flex"
                 >
                   <TabsList>
                     {(['all', 'exercise', 'event', 'incident'] as FilterType[]).map(type => (
                       <TabsTrigger
                         key={type}
                         value={type}
-                        className="gap-1.5"
+                        className="gap-1.5 text-xs px-3"
                       >
                         <span>{type === 'all' ? 'All' : `${TYPE_LABELS[type]}s`}</span>
                         <Badge
@@ -451,12 +535,85 @@ export function Dashboard() {
                     ))}
                   </TabsList>
                 </Tabs>
+
+                {/* Filter Dropdown (Mobile Only - Fits on single line) */}
+                <div className="sm:hidden">
+                  <DropdownMenu.Root>
+                    <DropdownMenu.Trigger asChild>
+                      <Button
+                        variant="outline"
+                        className="h-9 gap-1.5 px-3 text-xs font-semibold rounded-lg bg-white dark:bg-slate-900 border-slate-300/80 dark:border-slate-700 shadow-2xs"
+                      >
+                        <span className="text-slate-500 font-medium">Filter:</span>
+                        <span>{filter === 'all' ? 'All' : `${TYPE_LABELS[filter]}s`}</span>
+                        <Badge
+                          variant="secondary"
+                          className="h-4.5 px-1.5 text-[0.625rem] font-bold"
+                        >
+                          {counts[filter]}
+                        </Badge>
+                        <ChevronDown size={13} className="text-slate-500 ml-0.5" />
+                      </Button>
+                    </DropdownMenu.Trigger>
+                    <DropdownMenu.Portal>
+                      <DropdownMenu.Content
+                        className="select-content no-print animate-fade-in"
+                        align="end"
+                        sideOffset={6}
+                        style={{
+                          minWidth: 175,
+                          background: 'white',
+                          border: '1px solid var(--slate-4)',
+                          borderRadius: 8,
+                          padding: 4,
+                          boxShadow: '0 4px 16px rgba(0,0,0,0.12)',
+                          zIndex: 9999,
+                        }}
+                      >
+                        {(['all', 'exercise', 'event', 'incident'] as FilterType[]).map(type => {
+                          const isSelected = filter === type;
+                          return (
+                            <DropdownMenu.Item
+                              key={type}
+                              className="select-item"
+                              onSelect={() => setFilter(type)}
+                              style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'space-between',
+                                padding: '6px 8px',
+                                borderRadius: 6,
+                                fontSize: '0.8125rem',
+                                fontWeight: isSelected ? 600 : 500,
+                                color: isSelected ? 'var(--navy-9)' : 'var(--slate-12)',
+                                background: isSelected ? 'var(--navy-1)' : 'transparent',
+                                cursor: 'pointer',
+                                outline: 'none',
+                              }}
+                            >
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                <span>{type === 'all' ? 'All Activities' : `${TYPE_LABELS[type]}s`}</span>
+                                <Badge
+                                  variant="outline"
+                                  className={`h-4 px-1.5 text-[0.625rem] font-bold border ${TYPE_COLOR_STYLES[type] || TYPE_COLOR_STYLES.all}`}
+                                >
+                                  {counts[type]}
+                                </Badge>
+                              </div>
+                              {isSelected && <Check size={14} className="text-navy-9 ml-2" />}
+                            </DropdownMenu.Item>
+                          );
+                        })}
+                      </DropdownMenu.Content>
+                    </DropdownMenu.Portal>
+                  </DropdownMenu.Root>
+                </div>
               </div>
             ) : (
               <Button
                 variant="default"
                 onClick={handleCreateLocalRoster}
-                className="gap-1.5 font-semibold"
+                className="gap-1.5 font-semibold text-xs h-9 px-3 rounded-lg"
               >
                 + Add Local Roster
               </Button>
@@ -465,100 +622,89 @@ export function Dashboard() {
 
           {/* Content */}
           {viewMode === 'activities' ? (
-            isLoading ? (
-              effectiveActivitiesView === 'calendar' ? (
-                <CalendarSkeleton currentMonth={currentMonth} />
-              ) : (
-                <div style={{ display: 'grid', gap: 12 }}>
-                  {[...Array(6)].map((_, i) => (
-                    <div key={i} className="card" style={{ height: 88, padding: 20, display: 'flex', alignItems: 'center', gap: 16 }}>
-                      <div className="skeleton" style={{ width: 58, height: 58, borderRadius: 10, flexShrink: 0 }} />
-                      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 8 }}>
-                        <div className="skeleton" style={{ height: 16, width: '45%' }} />
-                        <div className="skeleton" style={{ height: 12, width: '65%' }} />
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )
-            ) : error ? (
-              <div className="card" style={{ padding: 40, textAlign: 'center' }}>
-                <div style={{ fontSize: '2rem', marginBottom: 12 }}>⚠️</div>
-                <p style={{ color: 'var(--red-11)', fontWeight: 600, marginBottom: 16 }}>{error}</p>
-                <Button variant="outline" onClick={() => load()}>Try Again</Button>
-              </div>
-            ) : effectiveActivitiesView === 'calendar' ? (
-              <CalendarView
-                activities={filtered}
+            <>
+              {/* Sticky Month Switcher Bar */}
+              <MonthSwitcherBar
                 currentMonth={currentMonth}
-                onMonthChange={(newMonth) => { setCurrentMonth(newMonth); setCurrentPage(1); }}
-                attendingActivityIds={attendingActivityIds}
-                onSelectActivity={(activity) => navigate(`/exercise/${activity.id}`, { state: { exercise: activity } })}
+                onMonthChange={handleMonthChange}
               />
-            ) : filtered.length === 0 ? (
-              <div className="card" style={{ padding: 64, textAlign: 'center' }}>
-                <div style={{
-                  width: 64, height: 64, borderRadius: 16,
-                  background: 'var(--slate-3)', border: '1px solid var(--slate-5)',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  margin: '0 auto 16px',
-                }}>
-                  <Layers size={28} style={{ color: 'var(--slate-8)' }} />
-                </div>
-                <h3 style={{ fontSize: '1.0625rem', fontWeight: 700, color: 'var(--slate-12)', marginBottom: 6 }}>
-                  No {filter === 'all' ? 'activities' : `${TYPE_LABELS[filter]}s`.toLowerCase()} in {format(currentMonth, 'MMMM yyyy')}
-                </h3>
-                <p style={{ fontSize: '0.875rem', color: 'var(--slate-10)' }}>
-                  Nothing scheduled for this month. Check back later or navigate to another month.
-                </p>
-              </div>
-            ) : (
-              <>
-                <div style={{ display: 'grid', gap: 10 }}>
-                  {paginated.map((activity, idx) => (
-                    <ActivityCard
-                      key={`${activity.type}-${activity.id}`}
-                      activity={activity}
-                      isAttending={attendingActivityIds.has(activity.id)}
-                      idx={idx}
-                      onClick={() => navigate(`/exercise/${activity.id}`, { state: { exercise: activity } })}
-                    />
-                  ))}
-                </div>
 
-                {/* Pagination */}
-                {totalPages > 1 && (
-                  <div style={{
-                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                    marginTop: 24, padding: '14px 20px',
-                    background: 'var(--slate-2)', border: '1px solid var(--slate-5)',
-                    borderRadius: 10,
-                  }}>
-                    <span style={{ fontSize: '0.8125rem', color: 'var(--slate-10)' }}>
-                      Page {currentPage} of {totalPages} · {filtered.length} results
-                    </span>
-                    <div style={{ display: 'flex', gap: 6 }}>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        disabled={currentPage === 1}
-                        onClick={() => { setCurrentPage(p => p - 1); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
-                      >
-                        Previous
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        disabled={currentPage === totalPages}
-                        onClick={() => { setCurrentPage(p => p + 1); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
-                      >
-                        Next
-                      </Button>
-                    </div>
+              {isLoading ? (
+                effectiveActivitiesView === 'calendar' ? (
+                  <CalendarSkeleton />
+                ) : (
+                  <div style={{ display: 'grid', gap: 12 }}>
+                    {[...Array(6)].map((_, i) => (
+                      <div key={i} className="card" style={{ height: 88, padding: 20, display: 'flex', alignItems: 'center', gap: 16 }}>
+                        <div className="skeleton" style={{ width: 58, height: 58, borderRadius: 10, flexShrink: 0 }} />
+                        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                          <div className="skeleton" style={{ height: 16, width: '45%' }} />
+                          <div className="skeleton" style={{ height: 12, width: '65%' }} />
+                        </div>
+                      </div>
+                    ))}
                   </div>
-                )}
-              </>
-            )
+                )
+              ) : error ? (
+                <div className="card" style={{ padding: 40, textAlign: 'center' }}>
+                  <div style={{ fontSize: '2rem', marginBottom: 12 }}>⚠️</div>
+                  <p style={{ color: 'var(--red-11)', fontWeight: 600, marginBottom: 16 }}>{error}</p>
+                  <Button variant="outline" onClick={() => load()}>Try Again</Button>
+                </div>
+              ) : effectiveActivitiesView === 'calendar' ? (
+                <CalendarView
+                  activities={filtered}
+                  currentMonth={currentMonth}
+                  attendingActivityIds={attendingActivityIds}
+                  onSelectActivity={(activity) => navigate(`/exercise/${activity.id}`, { state: { exercise: activity } })}
+                />
+              ) : (
+                <>
+                  {filtered.length === 0 ? (
+                    <div className="card" style={{ padding: 56, textAlign: 'center' }}>
+                      <div style={{
+                        width: 56, height: 56, borderRadius: 14,
+                        background: 'var(--slate-3)', border: '1px solid var(--slate-5)',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        margin: '0 auto 14px',
+                      }}>
+                        <Layers size={26} style={{ color: 'var(--slate-8)' }} />
+                      </div>
+                      <h3 style={{ fontSize: '1.0625rem', fontWeight: 700, color: 'var(--slate-12)', marginBottom: 6 }}>
+                        No {filter === 'all' ? 'activities' : `${TYPE_LABELS[filter]}s`.toLowerCase()} in {format(currentMonth, 'MMMM yyyy')}
+                      </h3>
+                      <p style={{ fontSize: '0.875rem', color: 'var(--slate-10)', marginBottom: !isSameMonth(currentMonth, new Date()) ? 16 : 0 }}>
+                        {filter === 'all'
+                          ? `There are no activities scheduled for ${format(currentMonth, 'MMMM yyyy')}.`
+                          : `No ${TYPE_LABELS[filter]}s found for this month matching the selected filter.`}
+                      </p>
+                      {!isSameMonth(currentMonth, new Date()) && (
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          onClick={() => handleMonthChange(new Date())}
+                          className="font-semibold text-xs"
+                        >
+                          Jump to Current Month ({format(new Date(), 'MMM yyyy')})
+                        </Button>
+                      )}
+                    </div>
+                  ) : (
+                    <div style={{ display: 'grid', gap: 10 }}>
+                      {filtered.map((activity, idx) => (
+                        <ActivityCard
+                          key={`${activity.type}-${activity.id}`}
+                          activity={activity}
+                          isAttending={attendingActivityIds.has(activity.id)}
+                          idx={idx}
+                          onClick={() => navigate(`/exercise/${activity.id}`, { state: { exercise: activity } })}
+                        />
+                      ))}
+                    </div>
+                  )}
+                </>
+              )}
+            </>
           ) : (
             localRosters.length === 0 ? (
               <div className="card" style={{ padding: 64, textAlign: 'center' }}>
@@ -599,55 +745,40 @@ export function Dashboard() {
                   return (
                     <div
                       key={roster.id}
-                      className="card card-interactive activity-card animate-slide-up"
-                      style={{ padding: '16px 20px', display: 'flex', alignItems: 'center', gap: 16, animationDelay: `${idx * 30}ms`, animationFillMode: 'both' }}
+                      className="card card-interactive activity-card animate-slide-up group flex items-center gap-3.5 sm:gap-4 p-3 sm:p-4 rounded-xl border border-[var(--slate-4)] hover:border-[var(--navy-6)] bg-white hover:bg-[var(--slate-1)] dark:bg-[var(--slate-2)] transition-all duration-150 cursor-pointer shadow-xs"
+                      style={{ animationDelay: `${idx * 25}ms`, animationFillMode: 'both' }}
                       onClick={() => navigate(`/exercise/${roster.id}`, { state: { exercise: roster } })}
                     >
                       <div
-                        className="activity-card-date"
-                        style={{
-                          minWidth: 56, height: 56, borderRadius: 12,
-                          background: '#F0FDF4', border: '1px solid #BBF7D0',
-                          display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-                          flexShrink: 0,
-                        }}
+                        className="activity-card-date size-12 sm:size-14 rounded-xl bg-emerald-50 border border-emerald-300 text-emerald-950 dark:bg-emerald-950/50 dark:border-emerald-700 dark:text-emerald-200 flex flex-col items-center justify-center shrink-0 transition-transform duration-150 group-hover:scale-105"
                       >
-                        <div style={{ fontSize: '0.6875rem', fontWeight: 700, color: '#166534', textTransform: 'uppercase', letterSpacing: '0.06em', lineHeight: 1 }}>
+                        <div className="text-[0.625rem] sm:text-[0.6875rem] font-bold text-emerald-700 dark:text-emerald-300 uppercase tracking-wider leading-none">
                           {format(displayDate, 'MMM')}
                         </div>
-                        <div style={{ fontSize: '1.375rem', fontWeight: 800, color: '#14532D', lineHeight: 1.1 }}>
+                        <div className="text-lg sm:text-xl font-extrabold text-emerald-950 dark:text-emerald-100 leading-none mt-1">
                           {format(displayDate, 'd')}
                         </div>
                       </div>
 
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 5, flexWrap: 'wrap' }}>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-1.5 sm:gap-2 mb-1 flex-wrap">
                           <Badge variant="outline" className="h-5 px-2 text-[0.6875rem] font-bold uppercase border-emerald-300 bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">
                             Local
                           </Badge>
-                          <span style={{ fontWeight: 600, fontSize: '0.9375rem', color: 'var(--slate-12)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                          <span className="font-semibold text-sm sm:text-[0.9375rem] text-slate-900 dark:text-slate-100 truncate flex-1 min-w-[120px]">
                             {title}
                           </span>
                         </div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: '0.8125rem', color: 'var(--slate-10)' }}>
-                            <Calendar size={13} />
+                        <div className="flex items-center gap-3 sm:gap-4 flex-wrap text-xs sm:text-[0.8125rem] text-slate-500 dark:text-slate-400">
+                          <div className="flex items-center gap-1.5">
+                            <Clock size={13} className="text-slate-400" />
                             <span>{format(displayDate, 'yyyy-MM-dd HH:mm')}</span>
                           </div>
                         </div>
                       </div>
 
-                      <div
-                        className="activity-card-chevron"
-                        style={{
-                          width: 32, height: 32, borderRadius: 8,
-                          background: 'var(--slate-3)', border: '1px solid var(--slate-5)',
-                          display: 'flex', alignItems: 'center', justifyContent: 'center',
-                          flexShrink: 0, color: 'var(--slate-9)',
-                          transition: 'all 0.15s',
-                        }}
-                      >
-                        <ChevronRight size={16} />
+                      <div className="activity-card-chevron size-7 sm:size-8 rounded-lg bg-slate-100 border border-slate-200 dark:bg-slate-800 dark:border-slate-700 flex items-center justify-center shrink-0 text-slate-400 group-hover:text-slate-800 dark:group-hover:text-slate-200 group-hover:border-slate-300 transition-colors">
+                        <ChevronRight size={15} />
                       </div>
                     </div>
                   );
@@ -662,60 +793,9 @@ export function Dashboard() {
   );
 }
 
-function CalendarSkeleton({ currentMonth }: { currentMonth?: Date }) {
-  const isCurrentMonth = currentMonth ? isSameMonth(currentMonth, new Date()) : true;
+function CalendarSkeleton() {
   return (
     <div className="card" style={{ overflow: 'hidden', border: '1px solid var(--slate-3)' }}>
-      {/* Unified Month Header */}
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          padding: '12px 18px',
-          background: 'white',
-          borderBottom: '1px solid var(--slate-3)',
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-            <Button
-              variant="outline"
-              size="sm"
-              disabled
-              className="size-7.5 p-0"
-            >
-              <ChevronLeft size={16} />
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              disabled
-              className="size-7.5 p-0"
-            >
-              <ChevronRight size={16} />
-            </Button>
-          </div>
-          {currentMonth ? (
-            <h3 style={{ fontSize: '1.0625rem', fontWeight: 700, color: 'var(--slate-12)', margin: 0, paddingLeft: 4, lineHeight: 1, display: 'flex', alignItems: 'center' }}>
-              {format(currentMonth, 'MMMM yyyy')}
-            </h3>
-          ) : (
-            <div className="skeleton" style={{ width: 140, height: 20, borderRadius: 4 }} />
-          )}
-          {!isCurrentMonth && (
-            <Button
-              variant="outline"
-              size="sm"
-              disabled
-              className="h-7.5 px-3 text-xs font-semibold ml-1.5"
-            >
-              Today
-            </Button>
-          )}
-        </div>
-      </div>
-
       {/* Weekday headers */}
       <div style={{
         display: 'grid',
@@ -785,13 +865,11 @@ function CalendarSkeleton({ currentMonth }: { currentMonth?: Date }) {
 function CalendarView({
   activities,
   currentMonth,
-  onMonthChange,
   attendingActivityIds,
   onSelectActivity,
 }: {
   activities: Activity[];
   currentMonth: Date;
-  onMonthChange: (date: Date) => void;
   attendingActivityIds?: Set<number>;
   onSelectActivity: (activity: Activity) => void;
 }) {
@@ -813,7 +891,7 @@ function CalendarView({
     const rawStart = new Date(activity.startsAt);
     const rawEnd = activity.endsAt ? new Date(activity.endsAt) : rawStart;
     const start = isNaN(rawStart.getTime()) ? new Date() : rawStart;
-    let end = isNaN(rawEnd.getTime()) || rawEnd < start ? start : rawEnd;
+    const end = isNaN(rawEnd.getTime()) || rawEnd < start ? start : rawEnd;
 
     const startDay = startOfDay(start);
     let endDay = startOfDay(end);
@@ -840,60 +918,8 @@ function CalendarView({
     };
   });
 
-  const isCurrentMonth = isSameMonth(currentMonth, new Date());
-
   return (
     <div className="card" style={{ overflow: 'hidden', border: '1px solid var(--slate-3)' }}>
-      {/* Unified Month Header */}
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          padding: '12px 18px',
-          background: 'white',
-          borderBottom: '1px solid var(--slate-3)',
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => onMonthChange(subMonths(currentMonth, 1))}
-              title="Previous Month"
-              className="size-7.5 p-0"
-            >
-              <ChevronLeft size={16} />
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => onMonthChange(addMonths(currentMonth, 1))}
-              title="Next Month"
-              className="size-7.5 p-0"
-            >
-              <ChevronRight size={16} />
-            </Button>
-          </div>
-
-          <h3 style={{ fontSize: '1.0625rem', fontWeight: 700, color: 'var(--slate-12)', margin: 0, paddingLeft: 4, lineHeight: 1, display: 'flex', alignItems: 'center' }}>
-            {format(currentMonth, 'MMMM yyyy')}
-          </h3>
-
-          {!isCurrentMonth && (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => onMonthChange(new Date())}
-              className="h-7.5 px-3 text-xs font-semibold ml-1.5"
-            >
-              Today
-            </Button>
-          )}
-        </div>
-      </div>
-
       {/* Weekday headers */}
       <div style={{
         display: 'grid',
@@ -1069,6 +1095,7 @@ function CalendarView({
                   const title = activity.referenceDescription || activity.description || `Unnamed ${activity.type}`;
                   const isAttending = attendingActivityIds?.has(activity.id) ?? false;
                   const isPast = (activity.endsAt ? new Date(activity.endsAt) : new Date(activity.startsAt)) < new Date();
+                  const isCancelled = /cancelled/i.test(title) || /cancelled/i.test(activity.referenceDescription || '') || /cancelled/i.test(activity.description || '');
 
                   return (
                     <ActivityPopover
@@ -1081,7 +1108,7 @@ function CalendarView({
                         onClick={() => onSelectActivity(activity)}
                         onMouseEnter={() => setHoveredActivityId(activity.id)}
                         onMouseLeave={() => setHoveredActivityId(null)}
-                        className={`calendar-event-pill calendar-event-pill-${activity.type} ${hoveredActivityId === activity.id ? 'is-hovered' : ''}`}
+                        className={`calendar-event-pill calendar-event-pill-${activity.type} ${hoveredActivityId === activity.id ? 'is-hovered' : ''} ${isCancelled ? 'is-cancelled' : ''}`}
                         style={{
                           gridColumn: `${startCol + 1} / span ${span}`,
                           gridRow: slot + 1,
@@ -1123,7 +1150,15 @@ function CalendarView({
                           </span>
                         )}
 
-                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: 600 }}>
+                        <span
+                          style={{
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap',
+                            fontWeight: 600,
+                            textDecoration: isCancelled ? 'line-through' : undefined,
+                          }}
+                        >
                           {title}
                         </span>
                       </div>
@@ -1146,91 +1181,96 @@ function ActivityCard({
   onClick,
 }: {
   activity: Activity;
-  isAttending?: boolean;
+  isAttending: boolean;
   idx: number;
   onClick: () => void;
 }) {
-  const startDate = new Date(activity.startsAt);
-  const endDate = new Date(activity.endsAt);
+  const rawStart = new Date(activity.startsAt);
+  const rawEnd = activity.endsAt ? new Date(activity.endsAt) : rawStart;
+  const startDate = isNaN(rawStart.getTime()) ? new Date() : rawStart;
+  const endDate = isNaN(rawEnd.getTime()) ? startDate : rawEnd;
 
-  const todayStart = new Date();
-  todayStart.setHours(0, 0, 0, 0);
-  const isPast = startDate < todayStart;
+  const now = new Date();
+  const todayStart = startOfDay(now);
+  const isActivityToday = isSameDay(startDate, now);
+  const isPast = endDate < todayStart;
 
   const location = formatActivityLocation(activity) || null;
+  const title = activity.referenceDescription || activity.description || `Unnamed ${activity.type}`;
+  const isCancelled = /cancelled/i.test(title) || /cancelled/i.test(activity.referenceDescription || '') || /cancelled/i.test(activity.description || '');
 
   return (
     <div
-      className="card card-interactive activity-card animate-slide-up"
+      className={cn(
+        "card card-interactive activity-card animate-slide-up group flex items-center gap-3.5 sm:gap-4 p-3 sm:p-4 rounded-xl border border-[var(--slate-4)] hover:border-[var(--navy-6)] bg-white hover:bg-[var(--slate-1)] dark:bg-[var(--slate-2)] transition-all duration-150 cursor-pointer shadow-xs",
+        isPast && "opacity-75 grayscale-[0.3]"
+      )}
       style={{
-        padding: '16px 20px',
-        display: 'flex',
-        alignItems: 'center',
-        gap: 16,
-        animationDelay: `${idx * 30}ms`,
+        animationDelay: `${idx * 25}ms`,
         animationFillMode: 'both',
-        opacity: isPast ? 0.75 : 1,
-        filter: isPast ? 'grayscale(0.6)' : 'none',
       }}
       onClick={onClick}
     >
       {/* Date block */}
       <div
-        className="activity-card-date"
-        style={{
-          minWidth: 56,
-          height: 56,
-          borderRadius: 12,
-          background: isPast ? 'var(--slate-3)' : '#EEF2FF',
-          border: isPast ? '1px solid var(--slate-5)' : '1px solid #C7D2FE',
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          justifyContent: 'center',
-          flexShrink: 0,
-        }}
+        className={cn(
+          "activity-card-date size-12 sm:size-14 rounded-xl flex flex-col items-center justify-center shrink-0 border transition-transform duration-150 group-hover:scale-105",
+          isActivityToday
+            ? "bg-emerald-50 border-emerald-300 text-emerald-950 dark:bg-emerald-950/50 dark:border-emerald-700 dark:text-emerald-200"
+            : isPast
+              ? "bg-slate-100 border-slate-300 text-slate-600 dark:bg-slate-800/80 dark:border-slate-700 dark:text-slate-400"
+              : "bg-indigo-50/80 border-indigo-200 text-indigo-950 dark:bg-indigo-950/50 dark:border-indigo-800 dark:text-indigo-200"
+        )}
       >
         <div
-          style={{
-            fontSize: '0.6875rem',
-            fontWeight: 700,
-            color: isPast ? 'var(--slate-10)' : '#1a4480',
-            textTransform: 'uppercase',
-            letterSpacing: '0.06em',
-            lineHeight: 1,
-          }}
+          className={cn(
+            "text-[0.625rem] sm:text-[0.6875rem] font-bold uppercase tracking-wider leading-none",
+            isActivityToday
+              ? "text-emerald-700 dark:text-emerald-300"
+              : isPast
+                ? "text-slate-500 dark:text-slate-400"
+                : "text-indigo-600 dark:text-indigo-300"
+          )}
         >
           {format(startDate, 'MMM')}
         </div>
         <div
-          style={{
-            fontSize: '1.375rem',
-            fontWeight: 800,
-            color: isPast ? 'var(--slate-11)' : '#061B44',
-            lineHeight: 1.1,
-          }}
+          className={cn(
+            "text-lg sm:text-xl font-extrabold leading-none mt-1",
+            isActivityToday
+              ? "text-emerald-950 dark:text-emerald-100"
+              : isPast
+                ? "text-slate-700 dark:text-slate-200"
+                : "text-indigo-950 dark:text-indigo-100"
+          )}
         >
           {format(startDate, 'd')}
         </div>
       </div>
 
       {/* Info */}
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 5, flexWrap: 'wrap' }}>
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-1.5 sm:gap-2 mb-1 flex-wrap">
           <Badge
             variant="outline"
-            className={`h-5 px-2 text-[0.6875rem] font-bold uppercase border ${TYPE_COLOR_STYLES[activity.type] || TYPE_COLOR_STYLES.exercise} ${isPast ? 'opacity-70' : ''}`}
+            className={cn(
+              "h-5 px-2 text-[0.6875rem] font-bold uppercase border shadow-2xs",
+              TYPE_COLOR_STYLES[activity.type] || TYPE_COLOR_STYLES.exercise,
+              isPast && "opacity-70"
+            )}
           >
             {TYPE_LABELS[activity.type] || 'Activity'}
           </Badge>
+
           {isPast && (
             <Badge
               variant="secondary"
-              className="h-5 px-1.5 text-[0.625rem] font-extrabold uppercase text-slate-600 bg-slate-200/80"
+              className="h-5 px-1.5 text-[0.625rem] font-bold uppercase text-slate-600 bg-slate-200/80 dark:bg-slate-800 dark:text-slate-400"
             >
               Past
             </Badge>
           )}
+
           {isAttending && (
             <Badge
               variant="outline"
@@ -1240,48 +1280,47 @@ function ActivityCard({
               {isPast ? 'Attended' : 'Attending'}
             </Badge>
           )}
-          <span style={{ fontWeight: 600, fontSize: '0.9375rem', color: 'var(--slate-12)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-            {activity.referenceDescription || activity.description || `Unnamed ${activity.type}`}
+
+          <span
+            className={cn(
+              "font-semibold text-sm sm:text-[0.9375rem] text-slate-900 dark:text-slate-100 truncate flex-1 min-w-[120px]",
+              isCancelled && "line-through opacity-60"
+            )}
+            title={title}
+          >
+            {title}
           </span>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: '0.8125rem', color: 'var(--slate-10)' }}>
-            <Calendar size={13} />
-            <span>{format(startDate, 'HHmm')} – {format(endDate, 'HHmm')}</span>
+
+        <div className="flex items-center gap-3 sm:gap-4 flex-wrap text-xs sm:text-[0.8125rem] text-slate-500 dark:text-slate-400">
+          <div className="flex items-center gap-1.5 shrink-0">
+            <Clock size={13} className="text-slate-400" />
+            <span>
+              {isSameDay(startDate, endDate)
+                ? `${format(startDate, 'HH:mm')} – ${format(endDate, 'HH:mm')}`
+                : `${format(startDate, 'MMM d, HH:mm')} – ${format(endDate, 'MMM d, HH:mm')}`}
+            </span>
           </div>
+
           {location && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: '0.8125rem', color: 'var(--slate-10)', overflow: 'hidden' }}>
-              <MapPin size={13} style={{ flexShrink: 0 }} />
-              <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{location}</span>
+            <div className="flex items-center gap-1.5 min-w-0 max-w-[200px] sm:max-w-xs">
+              <MapPin size={13} className="text-slate-400 shrink-0" />
+              <span className="truncate">{location}</span>
             </div>
           )}
-          {activity.countAttendance !== undefined && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 5 }} className="badge badge-success">
-              <Users size={10} />
-              {activity.countAttendance} attending
+
+          {activity.countAttendance !== undefined && activity.countAttendance > 0 && (
+            <div className="flex items-center gap-1.5 shrink-0 text-slate-500 dark:text-slate-400">
+              <Users size={13} className="text-slate-400" />
+              <span>{activity.countAttendance} responding</span>
             </div>
           )}
         </div>
       </div>
 
       {/* Chevron */}
-      <div
-        className="activity-card-chevron"
-        style={{
-          width: 32,
-          height: 32,
-          borderRadius: 8,
-          background: 'var(--slate-3)',
-          border: '1px solid var(--slate-5)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          flexShrink: 0,
-          color: 'var(--slate-9)',
-          transition: 'all 0.15s',
-        }}
-      >
-        <ChevronRight size={16} />
+      <div className="activity-card-chevron size-7 sm:size-8 rounded-lg bg-slate-100 border border-slate-200 dark:bg-slate-800 dark:border-slate-700 flex items-center justify-center shrink-0 text-slate-400 group-hover:text-slate-800 dark:group-hover:text-slate-200 group-hover:border-slate-300 transition-colors">
+        <ChevronRight size={15} />
       </div>
     </div>
   );

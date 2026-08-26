@@ -176,15 +176,6 @@ export const ActivityStatusBadges: React.FC<ActivityStatusBadgesProps> = ({
         {TYPE_LABELS[activityType] || 'Activity'}
       </Badge>
 
-      {activity?.reference && (
-        <Badge
-          variant="outline"
-          className="h-7 px-2.5 text-xs font-bold font-mono tracking-wider text-slate-700 bg-slate-100/70 border-slate-300 dark:text-slate-300 dark:bg-slate-800"
-        >
-          #{activity.reference}
-        </Badge>
-      )}
-
       <Badge
         variant={isPast ? 'secondary' : 'outline'}
         className={`h-7 px-2.5 text-xs font-bold ${

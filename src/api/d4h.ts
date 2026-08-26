@@ -198,7 +198,10 @@ export function getActivityStreetAddress(activity?: Partial<Activity>): string |
   return null;
 }
 
-export function formatActivityLocation(activity?: Partial<Activity>): string {
+export function formatActivityLocation(
+  activity?: Partial<Activity>,
+  options?: { allowCoordinates?: boolean }
+): string {
   if (!activity) return '';
 
   const streetAddress = getActivityStreetAddress(activity);
@@ -206,8 +209,43 @@ export function formatActivityLocation(activity?: Partial<Activity>): string {
     return streetAddress;
   }
 
-  // If no full street address with house number, use GPS coordinates if available
+  const street = activity.address?.street?.trim();
+  const town = activity.address?.town?.trim();
+  const region = activity.address?.region?.trim();
+
+  // Street name even without building number (e.g., "Bald Rock Rd")
+  if (street) {
+    if (town && !street.toLowerCase().includes(town.toLowerCase())) {
+      return `${street}, ${town}`;
+    }
+    return street;
+  }
+
+  // Town & Region (e.g., "Berry Creek, CA" or "Richmond")
+  if (town) {
+    if (region && !town.toLowerCase().includes(region.toLowerCase())) {
+      return `${town}, ${region}`;
+    }
+    return town;
+  }
+
+  // Extract county from title/description if enclosed in parentheses (e.g. "(Placer)", "(Butte)", "(San Mateo)")
+  const title = (activity.referenceDescription || activity.description || '').trim();
+  const countyMatch = title.match(/\(([A-Za-z\s]+)\)/);
+  if (countyMatch && countyMatch[1]) {
+    const candidate = countyMatch[1].trim();
+    if (!/^(canceled|cancelled|draft|pending|exercise|event|incident|closed|archive)$/i.test(candidate)) {
+      return /county/i.test(candidate) ? candidate : `${candidate} County`;
+    }
+  }
+
+  if (region) {
+    return region;
+  }
+
+  // Only show coordinates if explicitly requested (e.g. in map coordinate inspect tool), never in standard list views
   if (
+    options?.allowCoordinates &&
     activity.location?.coordinates &&
     Array.isArray(activity.location.coordinates) &&
     activity.location.coordinates.length >= 2
@@ -216,20 +254,6 @@ export function formatActivityLocation(activity?: Partial<Activity>): string {
     if (lat !== 0 || lng !== 0) {
       return `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
     }
-  }
-
-  const town = activity.address?.town?.trim();
-  const region = activity.address?.region?.trim();
-
-  if (town) {
-    if (region && !town.toLowerCase().includes(region.toLowerCase())) {
-      return `${town}, ${region}`;
-    }
-    return town;
-  }
-
-  if (region) {
-    return region;
   }
 
   return '';
@@ -293,7 +317,7 @@ export interface Member {
 }
 
 /**
- * Extracts the user's operational region from D4H custom fields or address (e.g. "East Bay", "South Bay", "North Bay", "San Francisco").
+ * Extracts the user's operational region from D4H custom fields or address (e.g. "East Bay", "South Bay", "North Bay", "San Francisco / Peninsula").
  */
 export function extractMemberRegion(member?: Partial<Member>): string {
   if (!member) return '';
@@ -310,75 +334,47 @@ export function extractMemberRegion(member?: Partial<Member>): string {
       const val = regionEntry.value;
       const options = (regionEntry.customField as any)?.options || (regionEntry.customField as any)?.choices;
 
-      // Handle direct string value
-      if (typeof val === 'string' && val.trim()) {
-        const trimmed = val.trim();
-        // Check if numeric string that corresponds to option id
-        if (/^\d+$/.test(trimmed) && Array.isArray(options)) {
-          const opt = options.find((o: any) => String(o.id) === trimmed || String(o.value) === trimmed);
-          if (opt && (opt.value || opt.label || opt.title)) {
-            return opt.value || opt.label || opt.title;
-          }
+      const resolveOption = (raw: any): string => {
+        if (raw === undefined || raw === null) return '';
+        if (typeof raw === 'object') {
+          if (typeof raw.value === 'string' && raw.value.trim()) return raw.value.trim();
+          if (typeof raw.label === 'string' && raw.label.trim()) return raw.label.trim();
+          if (typeof raw.title === 'string' && raw.title.trim()) return raw.title.trim();
+          if (raw.id !== undefined) return resolveOption(raw.id);
         }
-        // Known fallback mapping for CalSAR custom field 6328
-        const numId = parseInt(trimmed, 10);
-        if (numId === 14810) return 'East Bay';
-        if (numId === 14811) return 'South Bay';
-        if (numId === 14812) return 'North Bay';
-        if (numId === 14813) return 'San Francisco';
-        if (numId === 14814) return 'Other State';
-        if (numId === 14815) return 'Other Country';
 
-        return trimmed;
-      }
+        const strVal = String(raw).trim();
+        const numId = parseInt(strVal, 10);
 
-      // Handle number (option ID)
-      if (typeof val === 'number') {
         if (Array.isArray(options)) {
-          const opt = options.find((o: any) => o.id === val);
+          const opt = options.find((o: any) =>
+            String(o.id) === strVal ||
+            String(o.value) === strVal ||
+            (o.id !== undefined && !isNaN(numId) && o.id === numId)
+          );
           if (opt && (opt.value || opt.label || opt.title)) {
             return opt.value || opt.label || opt.title;
           }
         }
-        // Known fallback mapping for CalSAR custom field 6328
-        if (val === 14810) return 'East Bay';
-        if (val === 14811) return 'South Bay';
-        if (val === 14812) return 'North Bay';
-        if (val === 14813) return 'San Francisco';
-        if (val === 14814) return 'Other State';
-        if (val === 14815) return 'Other Country';
-      }
 
-      // Handle array (e.g. [14810] or ["East Bay"])
+        if (!isNaN(numId)) {
+          if (numId === 14810) return 'East Bay';
+          if (numId === 14811) return 'South Bay';
+          if (numId === 14812) return 'San Francisco / Peninsula';
+          if (numId === 14813) return 'North Bay';
+          if (numId === 14814) return 'Other State';
+          if (numId === 14815) return 'Other Country';
+        }
+
+        return strVal;
+      };
+
       if (Array.isArray(val) && val.length > 0) {
-        const first = val[0];
-        if (typeof first === 'string' && first.trim()) {
-          const trimmed = first.trim();
-          if (parseInt(trimmed, 10) === 14810) return 'East Bay';
-          if (parseInt(trimmed, 10) === 14811) return 'South Bay';
-          if (parseInt(trimmed, 10) === 14812) return 'North Bay';
-          if (parseInt(trimmed, 10) === 14813) return 'San Francisco';
-          return trimmed;
-        }
-        if (typeof first === 'number') {
-          if (Array.isArray(options)) {
-            const opt = options.find((o: any) => o.id === first);
-            if (opt && (opt.value || opt.label || opt.title)) {
-              return opt.value || opt.label || opt.title;
-            }
-          }
-          if (first === 14810) return 'East Bay';
-          if (first === 14811) return 'South Bay';
-          if (first === 14812) return 'North Bay';
-          if (first === 14813) return 'San Francisco';
-        }
-      }
-
-      // Handle object: { value: "East Bay" } or { label: "East Bay" }
-      if (val && typeof val === 'object') {
-        if (typeof (val as any).value === 'string' && (val as any).value.trim()) return (val as any).value.trim();
-        if (typeof (val as any).label === 'string' && (val as any).label.trim()) return (val as any).label.trim();
-        if (typeof (val as any).title === 'string' && (val as any).title.trim()) return (val as any).title.trim();
+        const resolved = resolveOption(val[0]);
+        if (resolved) return resolved;
+      } else if (val !== undefined && val !== null) {
+        const resolved = resolveOption(val);
+        if (resolved) return resolved;
       }
     }
   }
@@ -683,18 +679,9 @@ export const getActivities = async (
   }
 
   const cacheKey = `${contextId}_${starts_after}_${options?.startsBefore || ''}`;
+  const localCacheKey = `d4h_activities_cache_${cacheKey}`;
 
-  // Clean up any stale localStorage activity list caches from previous sessions
-  try {
-    for (let i = localStorage.length - 1; i >= 0; i--) {
-      const k = localStorage.key(i);
-      if (k && k.startsWith('d4h_activities_cache_')) {
-        localStorage.removeItem(k);
-      }
-    }
-  } catch { }
-
-  // Check in-memory cache unless forceRefresh is requested
+  // Check in-memory and localStorage cache unless forceRefresh is requested
   if (!options?.forceRefresh) {
     const cached = activityListCache.get(cacheKey);
     if (cached && Date.now() - cached.cachedAt < ACTIVITIES_CACHE_TTL_MS) {
@@ -705,6 +692,22 @@ export const getActivities = async (
       }
       return list;
     }
+
+    try {
+      const stored = localStorage.getItem(localCacheKey);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (parsed && Array.isArray(parsed.results) && Date.now() - (parsed.cachedAt || 0) < ACTIVITIES_CACHE_TTL_MS) {
+          activityListCache.set(cacheKey, { results: parsed.results, cachedAt: parsed.cachedAt });
+          let list = parsed.results;
+          if (options?.startsBefore) {
+            const beforeMs = new Date(options.startsBefore).getTime();
+            list = list.filter((a: Activity) => new Date(a.startsAt).getTime() <= beforeMs);
+          }
+          return list;
+        }
+      }
+    } catch { }
   }
 
   const dedupeKey = `getActivities_${cacheKey}`;
@@ -755,8 +758,23 @@ export const getActivities = async (
     finalActivities.sort((a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime());
     const uniqueActivities = Array.from(new Map(finalActivities.map(a => [a.id, a])).values());
 
-    // Store in in-memory cache for SPA view switching
-    activityListCache.set(cacheKey, { results: uniqueActivities, cachedAt: Date.now() });
+    // Store in in-memory and persistent localStorage cache with TTL
+    const now = Date.now();
+    activityListCache.set(cacheKey, { results: uniqueActivities, cachedAt: now });
+    try {
+      localStorage.setItem(localCacheKey, JSON.stringify({ results: uniqueActivities, cachedAt: now }));
+    } catch {
+      // Quota exceeded: clean up oldest d4h_activities_cache_ entries and retry
+      try {
+        for (let i = localStorage.length - 1; i >= 0; i--) {
+          const k = localStorage.key(i);
+          if (k && k.startsWith('d4h_activities_cache_') && k !== localCacheKey) {
+            localStorage.removeItem(k);
+          }
+        }
+        localStorage.setItem(localCacheKey, JSON.stringify({ results: uniqueActivities, cachedAt: now }));
+      } catch { }
+    }
 
     if (options?.startsBefore) {
       const beforeMs = new Date(options.startsBefore).getTime();

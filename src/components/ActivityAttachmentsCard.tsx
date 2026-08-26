@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import * as HoverCard from '@radix-ui/react-hover-card';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import * as Popover from '@radix-ui/react-popover';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -45,10 +45,16 @@ function getFileIcon(filename?: string, mimeType?: string) {
   const name = (filename || '').toLowerCase();
   const mime = (mimeType || '').toLowerCase();
 
-  if (mime.startsWith('image/') || /\.(png|jpe?g|gif|webp|svg|bmp)$/i.test(name)) {
-    return { icon: ImageIcon, color: 'var(--purple-9)', bg: 'var(--purple-2)', border: 'var(--purple-4)' };
+  if (
+    mime.startsWith('image/') ||
+    /\.(png|jpe?g|gif|webp|svg|bmp)$/i.test(name)
+  ) {
+    return { icon: ImageIcon, color: 'var(--navy-9)', bg: 'var(--navy-2)', border: 'var(--navy-4)' };
   }
-  if (mime.includes('pdf') || /\.pdf$/i.test(name)) {
+  if (
+    mime.includes('pdf') ||
+    /\.pdf$/i.test(name)
+  ) {
     return { icon: FileText, color: 'var(--red-9)', bg: 'var(--red-2)', border: 'var(--red-4)' };
   }
   if (
@@ -57,7 +63,7 @@ function getFileIcon(filename?: string, mimeType?: string) {
     mime.includes('csv') ||
     /\.(xlsx?|csv|tsv)$/i.test(name)
   ) {
-    return { icon: Table, color: 'var(--green-9)', bg: 'var(--green-2)', border: 'var(--green-4)' };
+    return { icon: Table, color: 'var(--teal-9)', bg: 'var(--teal-2)', border: 'var(--teal-4)' };
   }
   if (
     mime.includes('zip') ||
@@ -147,24 +153,33 @@ const PhotoPreviewPopoverContent: React.FC<{
         )}
       </div>
 
-      {/* Image Preview Container */}
+      {/* Preview Image / Skeleton */}
       <div
         style={{
           width: '100%',
           height: 180,
           borderRadius: 8,
+          overflow: 'hidden',
           background: 'var(--slate-2)',
-          border: '1px solid var(--slate-3)',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          overflow: 'hidden',
+          position: 'relative',
         }}
       >
         {loading ? (
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, color: 'var(--slate-9)' }}>
-            <Loader2 size={20} style={{ animation: 'spin 1s linear infinite' }} />
-            <span style={{ fontSize: '0.75rem' }}>Loading preview…</span>
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 8,
+              color: 'var(--slate-8)',
+            }}
+          >
+            <Loader2 size={22} style={{ animation: 'spin 1s linear infinite' }} />
+            <span style={{ fontSize: '0.75rem', fontWeight: 500 }}>Loading preview...</span>
           </div>
         ) : imgUrl ? (
           <img
@@ -174,17 +189,126 @@ const PhotoPreviewPopoverContent: React.FC<{
               width: '100%',
               height: '100%',
               objectFit: 'cover',
-              borderRadius: 7,
               display: 'block',
             }}
           />
         ) : (
-          <div style={{ color: 'var(--slate-9)', fontSize: '0.75rem' }}>
-            Preview unavailable
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 6,
+              color: 'var(--slate-8)',
+            }}
+          >
+            <ImageIcon size={28} />
+            <span style={{ fontSize: '0.75rem' }}>No preview available</span>
           </div>
         )}
       </div>
     </div>
+  );
+};
+
+const AttachmentPhotoPopover: React.FC<{
+  contextId: number;
+  attachment: ActivityAttachment;
+  filename: string;
+  sizeStr: string;
+  children: React.ReactNode;
+}> = ({ contextId, attachment, filename, sizeStr, children }) => {
+  const [open, setOpen] = useState(false);
+  const openTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearTimers = useCallback(() => {
+    if (openTimerRef.current) clearTimeout(openTimerRef.current);
+    if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
+  }, []);
+
+  useEffect(() => {
+    return () => clearTimers();
+  }, [clearTimers]);
+
+  const handleMouseEnter = () => {
+    if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
+    openTimerRef.current = setTimeout(() => {
+      setOpen(true);
+    }, 300);
+  };
+
+  const handleMouseLeave = () => {
+    if (openTimerRef.current) clearTimeout(openTimerRef.current);
+    closeTimerRef.current = setTimeout(() => {
+      setOpen(false);
+    }, 150);
+  };
+
+  const handleContentMouseEnter = () => {
+    if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
+  };
+
+  const handleTriggerClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    clearTimers();
+    setOpen((prev) => !prev);
+  };
+
+  const triggerElement = React.isValidElement(children) ? (
+    React.cloneElement(children as React.ReactElement<any>, {
+      onClick: (e: React.MouseEvent) => {
+        (children as React.ReactElement<any>).props?.onClick?.(e);
+        handleTriggerClick(e);
+      },
+      onMouseEnter: (e: React.MouseEvent) => {
+        (children as React.ReactElement<any>).props?.onMouseEnter?.(e);
+        handleMouseEnter();
+      },
+      onMouseLeave: (e: React.MouseEvent) => {
+        (children as React.ReactElement<any>).props?.onMouseLeave?.(e);
+        handleMouseLeave();
+      },
+    })
+  ) : (
+    <div
+      onClick={handleTriggerClick}
+      onMouseEnter={handleMouseEnter}
+      onMouseLeave={handleMouseLeave}
+      style={{ cursor: 'pointer' }}
+    >
+      {children}
+    </div>
+  );
+
+  return (
+    <Popover.Root open={open} onOpenChange={setOpen}>
+      <Popover.Trigger asChild>
+        {triggerElement}
+      </Popover.Trigger>
+      <Popover.Portal>
+        <Popover.Content
+          className="popover-content"
+          side="top"
+          align="center"
+          sideOffset={8}
+          onMouseEnter={handleContentMouseEnter}
+          onMouseLeave={handleMouseLeave}
+          onInteractOutside={() => {
+            clearTimers();
+            setOpen(false);
+          }}
+        >
+          <PhotoPreviewPopoverContent
+            contextId={contextId}
+            attachment={attachment}
+            filename={filename}
+            sizeStr={sizeStr}
+          />
+        </Popover.Content>
+      </Popover.Portal>
+    </Popover.Root>
   );
 };
 
@@ -267,7 +391,16 @@ export const ActivityAttachmentsCard: React.FC<ActivityAttachmentsCardProps> = (
   }
 
   return (
-    <div className="card" style={{ padding: '22px 24px', display: 'flex', flexDirection: 'column', gap: 14, ...style }}>
+    <div
+      className="card activity-info-card"
+      style={{
+        padding: '22px 24px',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 14,
+        ...style,
+      }}
+    >
       {/* Card Header */}
       <div
         style={{
@@ -409,26 +542,15 @@ export const ActivityAttachmentsCard: React.FC<ActivityAttachmentsCardProps> = (
           }
 
           return (
-            <HoverCard.Root key={att.id} openDelay={300} closeDelay={150}>
-              <HoverCard.Trigger asChild>
-                {tileContent}
-              </HoverCard.Trigger>
-              <HoverCard.Portal>
-                <HoverCard.Content
-                  className="popover-content"
-                  side="top"
-                  align="center"
-                  sideOffset={8}
-                >
-                  <PhotoPreviewPopoverContent
-                    contextId={contextId}
-                    attachment={att}
-                    filename={filename}
-                    sizeStr={sizeStr}
-                  />
-                </HoverCard.Content>
-              </HoverCard.Portal>
-            </HoverCard.Root>
+            <AttachmentPhotoPopover
+              key={att.id}
+              contextId={contextId}
+              attachment={att}
+              filename={filename}
+              sizeStr={sizeStr}
+            >
+              {tileContent}
+            </AttachmentPhotoPopover>
           );
         })}
       </div>

@@ -47,15 +47,22 @@
 ## 5. UI, Design & Aesthetic Standards
 
 - **Design System & Components**:
-  - Use Radix UI primitives (`@radix-ui/react-dropdown-menu`, `@radix-ui/react-tooltip`, `@radix-ui/react-toggle-group`) with accessible keyboard navigation and portals.
-  - Maintain Lucide icon consistency (`size={13-16}`, `strokeWidth={2-2.5}`).
+  - Use shadcn UI with Vite and Radix UI (--preset bJMXIFLk). Use shadcn components by default (ex. `npx shadcn@latest add button`). If you find UI items that should be migrated while working, follow up with the user to offer an upgrade path.
+  - Use Lucide icons consistently.
   - Match text sizes and styles to existing styles to reduce visual clutter.
-- **Responsive Layout & Visual Hierarchy**:
-  - Cards should use subtle border tokens (`var(--slate-3)`), smooth transitions (`all 0.15s ease`), and clear badge states (`badge-exercise`, `badge-incident`, etc.).
   - Avoid clutter: prioritize actionable controls and hide developer/diagnostic text from end users.
+  - Design with responsiveness in mind, and default to Material 3 philosophies with shadcn styling
+
+- **Typography & Text Hierarchy Standards (shadcn / Tailwind Conventions)**:
+  Always standardize font sizes, line heights, and colors across cards, lists, modals, and forms to eliminate visual inconsistencies:
+  - **Card / Section Headings**: `text-base` or `1rem` (16px, `fontWeight: 700`), `line-height: 1.25`–`1.35`, color `var(--slate-12)` / `text-foreground`.
+  - **Standard Card Body & Content**: `text-sm` or `0.875rem` (14px), `lineHeight: 1.5` (`leading-normal`), color `var(--slate-11)` / `text-foreground`. Used for descriptions, activity details, data content, and primary list row text. Avoid arbitrary one-off font sizes like `0.9375rem` (15px) or bloated line-heights on card body text.
+  - **Subtitles & Secondary Metadata**: `text-xs` to `text-sm` (`0.75rem` – `0.8125rem` / 12–13px), `lineHeight: 1.4`, color `var(--slate-10)` / `var(--slate-9)` / `text-muted-foreground`. Used for addresses, timestamps, attendee counts, and secondary notes.
+  - **Badges, Tags & Captions**: `text-xs` or `text-[0.6875rem]` (11–12px), `fontWeight: 600` / `700`, uppercase tracking where applicable (`tracking-wider`).
+  - **Preserved Multiline Text (Descriptions/Notes)**: Always pair `text-sm` (`0.875rem`), `lineHeight: 1.5`, and `whiteSpace: 'pre-wrap'` for multiline formatted notes and descriptions.
 
 ## 6. Verification of APIs
 
 - Always use the browser and script running tools to check the shape of APIs
 - Stop and ask the user to enter tokens and credentials if needed
-- You must not perform write actions on any API without explicit permission from the user
+- DO NOT use APIs to perform write actions without explicit permission from the user
