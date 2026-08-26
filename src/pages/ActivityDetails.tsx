@@ -41,7 +41,6 @@ import { Navigate, useNavigate, useLocation, useParams } from 'react-router-dom'
 import { useReactToPrint } from 'react-to-print';
 import { getD4HActivityUrl, getActivity, getPreviousOpPeriodAttendees } from '../api/d4h';
 import type { Activity } from '../api/d4h';
-import { ActivityStatusBadges } from '../components/ActivityStatusBadges';
 import { ICS211AForm } from '../components/ICS211AForm';
 import { ICS211BForm } from '../components/ICS211BForm';
 import { ICS211Form } from '../components/ICS211Form';
@@ -633,19 +632,6 @@ export function ActivityDetails() {
               <div />
             )}
 
-            {/* Badges in Info view (on the right side of the screen, in line with switcher) */}
-            {isD4HConnected && activeView === 'info' && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginLeft: 'auto' }}>
-                <ActivityStatusBadges
-                  activity={currentExercise}
-                  activityType={activityType}
-                  attendees={attendees}
-                  isLocal={isLocal}
-                  onAttendanceChanged={() => pullData()}
-                />
-              </div>
-            )}
-
             {/* Map Actions in top header row (in line with switcher) */}
             {!isLocal && activeView === 'map' && (
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginLeft: 'auto', flexWrap: 'wrap' }}>
@@ -1067,6 +1053,7 @@ export function ActivityDetails() {
                 medicalMap={medicalMap}
                 technicalMap={technicalMap}
                 isLocal={isLocal}
+                onAttendanceChanged={() => pullData()}
                 onSwitchToRoster={() => handleViewChange('roster')}
                 onSwitchToMap={() => handleViewChange('map')}
               />

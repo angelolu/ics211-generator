@@ -44,6 +44,7 @@ import { ActivityWeatherConditions } from './ActivityWeatherConditions';
 import { cleanDescription } from './ActivityPopover';
 import { MemberPopover } from './MemberPopover';
 import { ActivityAttachmentsCard } from './ActivityAttachmentsCard';
+import { ActivityStatusBadges } from './ActivityStatusBadges';
 
 interface ActivityInfoViewProps {
   activity: Activity | null;
@@ -171,6 +172,7 @@ export const ActivityInfoView: React.FC<ActivityInfoViewProps> = ({
   technicalMap,
   isLocal = false,
   onSwitchToMap,
+  onAttendanceChanged,
 }) => {
   const navigate = useNavigate();
   const contextIdStr = localStorage.getItem('d4h_context_id');
@@ -828,19 +830,31 @@ export const ActivityInfoView: React.FC<ActivityInfoViewProps> = ({
         : 'There is an operational period on the following day';
     } else if (isMultiDayActivity) {
       opPeriodText = isActPast
-        ? 'This activity spanned multiple operational days'
-        : 'This activity spans multiple operational days';
+        ? 'This activity spanned multiple days'
+        : 'This activity spans multiple days';
     }
 
     const hasMultiOpNotice = Boolean(opPeriodText);
 
     return (
       <div className="card activity-info-card activity-info-desc-card" style={{ padding: '22px 26px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingBottom: 12, borderBottom: '1px solid var(--slate-3)', marginBottom: 14 }}>
-          <Info size={18} style={{ color: 'var(--navy-7)' }} />
-          <h2 style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--slate-12)', margin: 0 }}>
-            Activity Description
-          </h2>
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-[var(--slate-3)] mb-3.5">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Info size={18} style={{ color: 'var(--navy-7)' }} className="shrink-0" />
+            <h2 style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--slate-12)', margin: 0 }}>
+              Activity Description
+            </h2>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <ActivityStatusBadges
+              activity={activity}
+              activityType={activityType || activity?.type || 'exercise'}
+              attendees={attendees}
+              isLocal={isLocal}
+              onAttendanceChanged={onAttendanceChanged}
+            />
+          </div>
         </div>
         {cleanedDesc && (
           <div

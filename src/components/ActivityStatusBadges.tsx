@@ -162,27 +162,26 @@ export const ActivityStatusBadges: React.FC<ActivityStatusBadgesProps> = ({
     activityType === 'incident'
       ? 'bg-red-50 text-red-800 border-red-200 dark:bg-red-950/50 dark:text-red-300 dark:border-red-800'
       : activityType === 'event'
-      ? 'bg-teal-50 text-teal-800 border-teal-200 dark:bg-teal-950/50 dark:text-teal-300 dark:border-teal-800'
-      : activityType === 'local'
-      ? 'bg-slate-100 text-slate-700 border-slate-300 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700'
-      : 'bg-sky-50 text-sky-800 border-sky-200 dark:bg-sky-950/50 dark:text-sky-300 dark:border-sky-800';
+        ? 'bg-teal-50 text-teal-800 border-teal-200 dark:bg-teal-950/50 dark:text-teal-300 dark:border-teal-800'
+        : activityType === 'local'
+          ? 'bg-slate-100 text-slate-700 border-slate-300 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700'
+          : 'bg-sky-50 text-sky-800 border-sky-200 dark:bg-sky-950/50 dark:text-sky-300 dark:border-sky-800';
 
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
       <Badge
         variant="outline"
-        className={`h-7 px-2.5 text-xs font-bold uppercase tracking-wider shadow-xs border ${typeColorClass}`}
+        className={`h-7 px-2.5 text-xs font-bold tracking-wider shadow-xs border ${typeColorClass}`}
       >
         {TYPE_LABELS[activityType] || 'Activity'}
       </Badge>
 
       <Badge
         variant={isPast ? 'secondary' : 'outline'}
-        className={`h-7 px-2.5 text-xs font-bold ${
-          isPast
+        className={`h-7 px-2.5 text-xs font-bold ${isPast
             ? 'text-slate-600 bg-slate-100 border-slate-200'
             : 'border-emerald-300 bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800'
-        }`}
+          }`}
       >
         {isPast ? 'Completed' : 'Upcoming / Active'}
       </Badge>
@@ -208,20 +207,20 @@ export const ActivityStatusBadges: React.FC<ActivityStatusBadgesProps> = ({
                   effectiveStatus === 'ATTENDING'
                     ? '#ecfdf5'
                     : effectiveStatus === 'ABSENT'
-                    ? 'var(--slate-2)'
-                    : 'var(--slate-2)',
+                      ? 'var(--slate-2)'
+                      : 'var(--slate-2)',
                 color:
                   effectiveStatus === 'ATTENDING'
                     ? '#047857'
                     : effectiveStatus === 'ABSENT'
-                    ? 'var(--slate-10)'
-                    : 'var(--slate-10)',
+                      ? 'var(--slate-10)'
+                      : 'var(--slate-10)',
                 border:
                   effectiveStatus === 'ATTENDING'
                     ? '1px solid #a7f3d0'
                     : effectiveStatus === 'ABSENT'
-                    ? '1px solid var(--slate-4)'
-                    : '1px dashed var(--slate-5)',
+                      ? '1px solid var(--slate-4)'
+                      : '1px dashed var(--slate-5)',
               }}
             >
               {isUpdatingStatus ? (
@@ -239,8 +238,8 @@ export const ActivityStatusBadges: React.FC<ActivityStatusBadgesProps> = ({
                     ? 'Attended'
                     : 'Attending'
                   : effectiveStatus === 'ABSENT'
-                  ? 'Not Attending'
-                  : 'No Response'}
+                    ? 'Not Attending'
+                    : 'No Response'}
               </span>
               <ChevronDown size={11} style={{ opacity: 0.6, marginLeft: 1 }} />
             </button>
