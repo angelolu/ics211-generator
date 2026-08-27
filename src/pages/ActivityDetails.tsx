@@ -138,6 +138,10 @@ export function ActivityDetails() {
   });
 
   useEffect(() => {
+    window.scrollTo({ top: 0, behavior: 'instant' });
+  }, [id]);
+
+  useEffect(() => {
     if (exercise || cachedActivity) return;
     if (!id) {
       navigate('/dashboard', { replace: true });
@@ -613,17 +617,17 @@ export function ActivityDetails() {
                   if (v) handleViewChange(v as 'info' | 'roster' | 'map');
                 }}
               >
-                <TabsList>
-                  <TabsTrigger value="info">
-                    <Info size={14} />
+                <TabsList className="h-10 p-1 bg-slate-200/80 border-slate-300/70 dark:bg-slate-800 dark:border-slate-700/80 gap-1 rounded-xl shadow-2xs">
+                  <TabsTrigger value="info" className="h-8 px-3.5 sm:px-4 text-sm font-semibold gap-1.5 rounded-lg">
+                    <Info size={16} />
                     <span>Info</span>
                   </TabsTrigger>
-                  <TabsTrigger value="roster">
-                    <FileText size={14} />
+                  <TabsTrigger value="roster" className="h-8 px-3.5 sm:px-4 text-sm font-semibold gap-1.5 rounded-lg">
+                    <FileText size={16} />
                     <span>Roster</span>
                   </TabsTrigger>
-                  <TabsTrigger value="map">
-                    <MapIcon size={14} />
+                  <TabsTrigger value="map" className="h-8 px-3.5 sm:px-4 text-sm font-semibold gap-1.5 rounded-lg">
+                    <MapIcon size={16} />
                     <span>Map</span>
                   </TabsTrigger>
                 </TabsList>

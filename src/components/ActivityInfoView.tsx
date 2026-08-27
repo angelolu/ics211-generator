@@ -3,10 +3,14 @@ import { useNavigate } from 'react-router-dom';
 import { isSameDay, isToday, isTomorrow, differenceInMinutes, format } from 'date-fns';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { cn } from '@/lib/utils';
 import {
   ArrowLeft,
   ArrowRight,
   Calendar,
+  ChevronDown,
+  ChevronUp,
+  ClipboardList,
   ExternalLink,
   Info,
   MapPin,
@@ -570,6 +574,8 @@ export const ActivityInfoView: React.FC<ActivityInfoViewProps> = ({
   }, [canRespond, currentMember, fullActivityAddress, lat, lng, isEventTodayOrTomorrow, formatDrivingTimeSummary]);
 
   const cleanedDesc = cleanDescription(activity?.description);
+  const rawPrePlan = (activity as any)?.prePlan || (activity as any)?.pre_plan || (activity as any)?.plan || (activity as any)?.preplan || (activity as any)?.prePlanning || (activity as any)?.pre_planning;
+  const cleanedPrePlan = cleanDescription(rawPrePlan);
 
   const uniqueMemberIds = React.useMemo(() => {
     return new Set(attendees.map((a) => a.member?.id).filter(Boolean));
@@ -660,11 +666,22 @@ export const ActivityInfoView: React.FC<ActivityInfoViewProps> = ({
   members.forEach((m) => memberMap.set(m.id, m));
 
   const isReadyToLoadPictures = attendees.length > 0 && members.length > 0;
+  const [isDescExpanded, setIsDescExpanded] = React.useState(false);
+  const [isPrePlanExpanded, setIsPrePlanExpanded] = React.useState(false);
+  const [activeTab, setActiveTab] = React.useState<'description' | 'preplan'>('description');
 
-  const isLongDesc = Boolean(cleanedDesc && cleanedDesc.trim().length > 150);
-
-  const renderDateAndConditionsCard = () => (
-    <div className="card activity-info-card" style={{ padding: '22px 24px', display: 'flex', flexDirection: 'column', gap: 16 }}>
+  const renderDateAndConditionsCard = (animIdx = 2) => (
+    <div
+      className="card activity-info-card animate-slide-up w-full order-2 lg:order-none"
+      style={{
+        padding: '22px 24px',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 16,
+        animationDelay: `${animIdx * 50}ms`,
+        animationFillMode: 'both',
+      }}
+    >
       {/* Card header */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingBottom: 12, borderBottom: '1px solid var(--slate-3)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -722,13 +739,23 @@ export const ActivityInfoView: React.FC<ActivityInfoViewProps> = ({
     </div>
   );
 
-  const renderLocationCard = () => {
+  const renderLocationCard = (animIdx = 1) => {
     const altLocation = !streetAddress && (activity?.address?.town || activity?.address?.street)
       ? [activity?.address?.street, activity?.address?.town].filter(Boolean).join(', ')
       : '';
 
     return (
-      <div className="card activity-info-card" style={{ padding: '22px 24px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <div
+        className="card activity-info-card animate-slide-up w-full order-3 lg:order-none"
+        style={{
+          padding: '22px 24px',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 14,
+          animationDelay: `${animIdx * 50}ms`,
+          animationFillMode: 'both',
+        }}
+      >
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingBottom: 12, borderBottom: '1px solid var(--slate-3)' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <MapPin size={18} style={{ color: 'var(--navy-7)' }} />
@@ -793,14 +820,17 @@ export const ActivityInfoView: React.FC<ActivityInfoViewProps> = ({
     );
   };
 
-  const renderDescriptionCard = () => {
+  const renderDescriptionAndPlanCard = (animIdx = 0) => {
     const hasYesterdayOp = adjacentOps.hasYesterdayOp && Boolean(adjacentOps.yesterdayActivity);
     const hasTomorrowOp = adjacentOps.hasTomorrowOp && Boolean(adjacentOps.tomorrowActivity);
     const hasMultipleOpActivities = hasYesterdayOp || hasTomorrowOp;
     const isMultiDayActivity = adjacentOps.isMultiDaySpanning || isMultiDay || isMultiPeriod;
+    const hasDesc = Boolean(cleanedDesc || hasMultipleOpActivities);
+    const hasPrePlan = Boolean(cleanedPrePlan);
+    const hasBothTabs = hasDesc && hasPrePlan;
 
-    // If description is empty AND there is no previous day or next day op, hide the entire card
-    if (!cleanedDesc && !hasMultipleOpActivities) return null;
+    // If neither description nor pre-plan exists, hide the entire card
+    if (!hasDesc && !hasPrePlan) return null;
 
     const now = new Date();
     const isActPast = (activity?.endsAt ? new Date(activity.endsAt) : startDate) < now;
@@ -835,18 +865,217 @@ export const ActivityInfoView: React.FC<ActivityInfoViewProps> = ({
     }
 
     const hasMultiOpNotice = Boolean(opPeriodText);
+    const isLongDesc = Boolean(cleanedDesc && (cleanedDesc.split('\n').length > 5 || cleanedDesc.length > 280));
+    const isLongPrePlan = Boolean(cleanedPrePlan && (cleanedPrePlan.split('\n').length > 5 || cleanedPrePlan.length > 280));
 
-    return (
-      <div className="card activity-info-card activity-info-desc-card" style={{ padding: '22px 26px' }}>
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-[var(--slate-3)] mb-3.5">
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <Info size={18} style={{ color: 'var(--navy-7)' }} className="shrink-0" />
-            <h2 style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--slate-12)', margin: 0 }}>
-              Activity Description
-            </h2>
+    const showingDescTab = hasBothTabs ? activeTab === 'description' : hasDesc;
+
+    // Render operational period footer (full length separator flush with bottom of the card)
+    const renderOpPeriodFooter = () => {
+      if (!hasMultiOpNotice) return null;
+      return (
+        <div className="-mx-4 sm:-mx-[26px] -mb-3.5 sm:-mb-[22px] mt-4 pt-3 sm:pt-3.5 pb-3 sm:pb-3.5 px-4 sm:px-[26px] border-t border-[var(--slate-3)] bg-slate-50/70 dark:bg-slate-900/40 rounded-b-[11px]">
+          <div
+            className="op-period-nav-row"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 8,
+              width: '100%',
+            }}
+          >
+            {/* Left Slot: Previous Day button */}
+            <div style={{ flex: '0 0 auto', display: 'flex', justifyContent: 'flex-start' }}>
+              {hasYesterdayOp && adjacentOps.yesterdayActivity ? (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() =>
+                    navigate(`/exercise/${adjacentOps.yesterdayActivity!.id}`, {
+                      state: { exercise: adjacentOps.yesterdayActivity },
+                    })
+                  }
+                  className="h-8 px-2 sm:px-2.5 gap-1.5 text-xs font-semibold text-slate-700 hover:text-slate-900 dark:text-slate-300 shrink-0"
+                  title="Navigate to previous day's operational period"
+                  aria-label="Previous day operational period"
+                >
+                  <ArrowLeft size={14} />
+                  <span className="hidden sm:inline">Previous Day</span>
+                </Button>
+              ) : (
+                <div style={{ visibility: 'hidden', width: 32 }} aria-hidden="true" />
+              )}
+            </div>
+
+            {/* Center Slot: Status text */}
+            <div
+              style={{
+                flex: 1,
+                fontSize: '0.8125rem',
+                color: 'var(--slate-10)',
+                fontWeight: 500,
+                textAlign: 'center',
+                padding: '0 4px',
+                lineHeight: 1.35,
+                minWidth: 0,
+              }}
+            >
+              {opPeriodText}
+            </div>
+
+            {/* Right Slot: Next Day button */}
+            <div style={{ flex: '0 0 auto', display: 'flex', justifyContent: 'flex-end' }}>
+              {hasTomorrowOp && adjacentOps.tomorrowActivity ? (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() =>
+                    navigate(`/exercise/${adjacentOps.tomorrowActivity!.id}`, {
+                      state: { exercise: adjacentOps.tomorrowActivity },
+                    })
+                  }
+                  className="h-8 px-2 sm:px-2.5 gap-1.5 text-xs font-semibold text-slate-700 hover:text-slate-900 dark:text-slate-300 shrink-0"
+                  title="Navigate to following day's operational period"
+                  aria-label="Next day operational period"
+                >
+                  <span className="hidden sm:inline">Next Day</span>
+                  <ArrowRight size={14} />
+                </Button>
+              ) : (
+                <div style={{ visibility: 'hidden', width: 32 }} aria-hidden="true" />
+              )}
+            </div>
+          </div>
+        </div>
+      );
+    };
+
+    // ── SCENARIO A: Single content (Only Description OR Only Pre-Plan) ──
+    if (!hasBothTabs) {
+      const isDescOnly = hasDesc;
+      const content = isDescOnly ? cleanedDesc : cleanedPrePlan;
+      const isLong = isDescOnly ? isLongDesc : isLongPrePlan;
+      const isExpanded = isDescOnly ? isDescExpanded : isPrePlanExpanded;
+      const toggleExpand = isDescOnly
+        ? () => setIsDescExpanded((prev) => !prev)
+        : () => setIsPrePlanExpanded((prev) => !prev);
+      const title = isDescOnly ? 'Activity Description' : 'Pre-Plan';
+      const Icon = isDescOnly ? Info : ClipboardList;
+
+      return (
+        <div
+          className="card activity-info-card activity-info-desc-card animate-slide-up w-full order-1 lg:order-none"
+          style={{
+            padding: '22px 26px',
+            animationDelay: `${animIdx * 50}ms`,
+            animationFillMode: 'both',
+          }}
+        >
+          {/* Standard Header Row */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-[var(--slate-3)] mb-3.5">
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <Icon size={18} style={{ color: 'var(--navy-7)' }} className="shrink-0" />
+              <h2 style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--slate-12)', margin: 0 }}>
+                {title}
+              </h2>
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <ActivityStatusBadges
+                activity={activity}
+                activityType={activityType || activity?.type || 'exercise'}
+                attendees={attendees}
+                isLocal={isLocal}
+                onAttendanceChanged={onAttendanceChanged}
+              />
+            </div>
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          {/* Standard Body (no stylized text box) */}
+          {content && (
+            <div>
+              <div
+                className={cn(
+                  "activity-info-desc-content text-sm sm:text-[0.9375rem] text-[var(--slate-12)] dark:text-slate-100 font-normal leading-relaxed whitespace-pre-wrap break-words [overflow-wrap:anywhere] transition-all duration-200",
+                  !isExpanded && isLong
+                    ? "line-clamp-5 overflow-hidden sm:line-clamp-none sm:overflow-visible"
+                    : "line-clamp-none"
+                )}
+              >
+                {content}
+              </div>
+
+              {isLong && (
+                <button
+                  type="button"
+                  onClick={toggleExpand}
+                  className="mt-1.5 text-xs font-semibold text-sky-600 hover:text-sky-700 dark:text-sky-400 dark:hover:text-sky-300 inline-flex sm:hidden items-center gap-1 cursor-pointer select-none transition-colors"
+                >
+                  <span>{isExpanded ? 'See less' : 'See more'}</span>
+                  {isExpanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* Card Footer for Op Period Navigation */}
+          {renderOpPeriodFooter()}
+        </div>
+      );
+    }
+
+    // ── SCENARIO B: Both Description and Pre-Plan exist (Tabbed view with touching stylized container) ──
+    return (
+      <div
+        className="card activity-info-card activity-info-desc-card animate-slide-up w-full order-1 lg:order-none"
+        style={{
+          padding: '22px 26px',
+          animationDelay: `${animIdx * 50}ms`,
+          animationFillMode: 'both',
+        }}
+      >
+        {/* Header Row: Badges on mobile top/right, Tabs docked seamlessly to the folder container */}
+        <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-2.5 sm:gap-4 mb-0">
+          {/* File Folder Tabs: Layered under the elevated container (centered on mobile, left-aligned on desktop) */}
+          <div className="order-2 sm:order-1 flex items-end justify-center sm:justify-start w-full sm:w-auto">
+            <div className="flex items-end gap-1.5 pl-0 sm:pl-4 justify-center sm:justify-start -mb-[1px] relative z-10">
+              <button
+                type="button"
+                onClick={() => setActiveTab('description')}
+                className={cn(
+                  "flex items-center gap-2 px-4 text-sm font-semibold rounded-t-xl transition-all cursor-pointer select-none",
+                  activeTab === 'description'
+                    ? "bg-[var(--slate-1)] dark:bg-slate-800/90 text-[var(--slate-12)] dark:text-slate-100 border-t border-x border-[var(--slate-3)] dark:border-slate-700/80 pt-2 pb-2.5 font-bold shadow-xs relative z-10"
+                    : "bg-slate-200/50 hover:bg-slate-200/80 dark:bg-slate-800/30 dark:hover:bg-slate-800/60 text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200 border border-[var(--slate-3)] dark:border-slate-700/80 py-1.5 font-medium relative z-0"
+                )}
+                aria-selected={activeTab === 'description'}
+                role="tab"
+              >
+                <Info size={15} className={activeTab === 'description' ? "text-[var(--navy-7)] dark:text-sky-400 shrink-0" : "text-slate-400 shrink-0"} />
+                <span>Description</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setActiveTab('preplan')}
+                className={cn(
+                  "flex items-center gap-2 px-4 text-sm font-semibold rounded-t-xl transition-all cursor-pointer select-none",
+                  activeTab === 'preplan'
+                    ? "bg-[var(--slate-1)] dark:bg-slate-800/90 text-[var(--slate-12)] dark:text-slate-100 border-t border-x border-[var(--slate-3)] dark:border-slate-700/80 pt-2 pb-2.5 font-bold shadow-xs relative z-10"
+                    : "bg-slate-200/50 hover:bg-slate-200/80 dark:bg-slate-800/30 dark:hover:bg-slate-800/60 text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200 border border-[var(--slate-3)] dark:border-slate-700/80 py-1.5 font-medium relative z-0"
+                )}
+                aria-selected={activeTab === 'preplan'}
+                role="tab"
+              >
+                <ClipboardList size={15} className={activeTab === 'preplan' ? "text-[var(--navy-7)] dark:text-sky-400 shrink-0" : "text-slate-400 shrink-0"} />
+                <span>Pre-Plan</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Badges: Order 1 on mobile top, Order 2 on desktop right */}
+          <div className="order-1 sm:order-2 flex items-center gap-2 flex-wrap justify-between sm:justify-end w-full sm:w-auto mb-2 sm:mb-2.5">
             <ActivityStatusBadges
               activity={activity}
               activityType={activityType || activity?.type || 'exercise'}
@@ -856,111 +1085,81 @@ export const ActivityInfoView: React.FC<ActivityInfoViewProps> = ({
             />
           </div>
         </div>
-        {cleanedDesc && (
-          <div
-            className="activity-info-desc-content"
-            style={{
-              fontSize: '0.875rem',
-              color: 'var(--slate-11)',
-              lineHeight: 1.5,
-              whiteSpace: 'pre-wrap',
-            }}
-          >
-            {cleanedDesc}
-          </div>
-        )}
 
-        {hasMultiOpNotice && (
-          <div style={{ marginTop: cleanedDesc ? 14 : 0 }}>
-            {cleanedDesc && (
-              <hr
-                style={{
-                  border: 'none',
-                  borderTop: '1px solid var(--slate-3)',
-                  margin: '14px 0 12px',
-                }}
-              />
-            )}
-            <div
-              className="op-period-nav-row"
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                gap: 8,
-                width: '100%',
-              }}
-            >
-              {/* Left Slot: Previous Day button */}
-              <div style={{ flex: '0 0 auto', display: 'flex', justifyContent: 'flex-start' }}>
-                {hasYesterdayOp && adjacentOps.yesterdayActivity ? (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() =>
-                      navigate(`/exercise/${adjacentOps.yesterdayActivity!.id}`, {
-                        state: { exercise: adjacentOps.yesterdayActivity },
-                      })
-                    }
-                    className="h-8 px-2 sm:px-2.5 gap-1.5 text-xs font-semibold text-slate-700 hover:text-slate-900 dark:text-slate-300 shrink-0"
-                    title="Navigate to previous day's operational period"
-                    aria-label="Previous day operational period"
+        {/* Elevated Cohesive Content Container (Higher browser z-index elevation than Tab Buttons) */}
+        <div className="activity-info-doc-container bg-[var(--slate-1)] dark:bg-slate-800/90 border border-[var(--slate-3)] dark:border-slate-700/80 rounded-xl p-4 sm:p-5 shadow-2xs relative z-20">
+          {/* Tab 1: Description Content */}
+          {showingDescTab ? (
+            <div>
+              {cleanedDesc && (
+                <div>
+                  <div
+                    className={cn(
+                      "activity-info-desc-content text-sm sm:text-[0.9375rem] text-[var(--slate-12)] dark:text-slate-100 font-normal leading-relaxed whitespace-pre-wrap break-words [overflow-wrap:anywhere] transition-all duration-200",
+                      !isDescExpanded && isLongDesc
+                        ? "line-clamp-5 overflow-hidden sm:line-clamp-none sm:overflow-visible"
+                        : "line-clamp-none"
+                    )}
                   >
-                    <ArrowLeft size={14} />
-                    <span className="hidden sm:inline">Previous Day</span>
-                  </Button>
-                ) : (
-                  <div style={{ visibility: 'hidden', width: 32 }} aria-hidden="true" />
-                )}
-              </div>
+                    {cleanedDesc}
+                  </div>
 
-              {/* Center Slot: Status text (strictly centered without overlapping) */}
-              <div
-                style={{
-                  flex: 1,
-                  fontSize: '0.8125rem',
-                  color: 'var(--slate-10)',
-                  fontWeight: 500,
-                  textAlign: 'center',
-                  padding: '0 4px',
-                  lineHeight: 1.35,
-                  minWidth: 0,
-                }}
-              >
-                {opPeriodText}
-              </div>
-
-              {/* Right Slot: Next Day button */}
-              <div style={{ flex: '0 0 auto', display: 'flex', justifyContent: 'flex-end' }}>
-                {hasTomorrowOp && adjacentOps.tomorrowActivity ? (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() =>
-                      navigate(`/exercise/${adjacentOps.tomorrowActivity!.id}`, {
-                        state: { exercise: adjacentOps.tomorrowActivity },
-                      })
-                    }
-                    className="h-8 px-2 sm:px-2.5 gap-1.5 text-xs font-semibold text-slate-700 hover:text-slate-900 dark:text-slate-300 shrink-0"
-                    title="Navigate to following day's operational period"
-                    aria-label="Next day operational period"
-                  >
-                    <span className="hidden sm:inline">Next Day</span>
-                    <ArrowRight size={14} />
-                  </Button>
-                ) : (
-                  <div style={{ visibility: 'hidden', width: 32 }} aria-hidden="true" />
-                )}
-              </div>
+                  {isLongDesc && (
+                    <button
+                      type="button"
+                      onClick={() => setIsDescExpanded((prev) => !prev)}
+                      className="mt-2 text-xs font-semibold text-sky-600 hover:text-sky-700 dark:text-sky-400 dark:hover:text-sky-300 inline-flex sm:hidden items-center gap-1 cursor-pointer select-none transition-colors"
+                    >
+                      <span>{isDescExpanded ? 'See less' : 'See more'}</span>
+                      {isDescExpanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
-          </div>
-        )}
+          ) : (
+            /* Tab 2: Pre-Plan Content */
+            <div>
+              <div
+                className={cn(
+                  "activity-info-preplan-content text-sm sm:text-[0.9375rem] text-[var(--slate-12)] dark:text-slate-100 font-normal leading-relaxed whitespace-pre-wrap break-words [overflow-wrap:anywhere] transition-all duration-200",
+                  !isPrePlanExpanded && isLongPrePlan
+                    ? "line-clamp-5 overflow-hidden sm:line-clamp-none sm:overflow-visible"
+                    : "line-clamp-none"
+                )}
+              >
+                {cleanedPrePlan}
+              </div>
+
+              {isLongPrePlan && (
+                <button
+                  type="button"
+                  onClick={() => setIsPrePlanExpanded((prev) => !prev)}
+                  className="mt-2 text-xs font-semibold text-sky-600 hover:text-sky-700 dark:text-sky-400 dark:hover:text-sky-300 inline-flex sm:hidden items-center gap-1 cursor-pointer select-none transition-colors"
+                >
+                  <span>{isPrePlanExpanded ? 'See less' : 'See more'}</span>
+                  {isPrePlanExpanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Card Footer for Op Period Navigation (outside the stylized box) */}
+        {renderOpPeriodFooter()}
       </div>
     );
   };
 
-  const renderPersonnelCard = () => (
-    <div className="card activity-info-card" style={{ padding: '22px 26px' }}>
+  const renderPersonnelCard = (animIdx = 4) => (
+    <div
+      className="card activity-info-card animate-slide-up w-full order-5 lg:order-none"
+      style={{
+        padding: '22px 26px',
+        animationDelay: `${animIdx * 50}ms`,
+        animationFillMode: 'both',
+      }}
+    >
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingBottom: 14, borderBottom: '1px solid var(--slate-3)', marginBottom: 16 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <Users size={18} style={{ color: 'var(--navy-7)' }} />
@@ -1099,46 +1298,34 @@ export const ActivityInfoView: React.FC<ActivityInfoViewProps> = ({
     </div>
   );
 
-  const renderAttachmentsCard = () => (
+  const renderAttachmentsCard = (animIdx = 3) => (
     <ActivityAttachmentsCard
       contextId={contextId}
       activity={activity}
       activityType={activityType}
       isLocal={isLocal}
+      className="w-full order-4 lg:order-none"
+      style={{
+        animationDelay: `${animIdx * 50}ms`,
+        animationFillMode: 'both',
+      }}
     />
   );
 
   return (
-    <div className="activity-info-view animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-      {isLongDesc ? (
-        /* ── 2-Column Split Layout (>150 char description) ──────── */
-        <div className="activity-info-split-container">
-          {/* Left Column: Activity Description + Responding Personnel (flex: 2, basis: 0) */}
-          <div className="activity-info-desc-col">
-            {renderDescriptionCard()}
-            {renderPersonnelCard()}
-          </div>
+    <div className="activity-info-view animate-fade-in flex flex-col lg:grid lg:grid-cols-3 gap-3 sm:gap-4 lg:gap-5 items-start">
+      {/* ── Left Column on Desktop (Description & Pre-Plan Tabbed Card + Personnel) ── */}
+      <div className="contents lg:flex lg:flex-col lg:col-span-2 lg:gap-5">
+        {renderDescriptionAndPlanCard(0)}
+        {renderPersonnelCard(4)}
+      </div>
 
-          {/* Right Column: Location + Date & Conditions + Attachments (flex: 1, basis: 0) */}
-          <div className="activity-info-meta-col">
-            {renderLocationCard()}
-            {renderDateAndConditionsCard()}
-            {renderAttachmentsCard()}
-          </div>
-        </div>
-      ) : (
-        /* ── Standard Flex Layout (<=150 char description or none) ──── */
-        <>
-          <div className="activity-info-cards-row">
-            {renderDateAndConditionsCard()}
-            {renderLocationCard()}
-            {renderAttachmentsCard()}
-            {renderDescriptionCard()}
-          </div>
-
-          {renderPersonnelCard()}
-        </>
-      )}
+      {/* ── Right Column on Desktop (Location + Date & Conditions + Attachments) ─── */}
+      <div className="contents lg:flex lg:flex-col lg:col-span-1 lg:gap-5">
+        {renderLocationCard(1)}
+        {renderDateAndConditionsCard(2)}
+        {renderAttachmentsCard(3)}
+      </div>
     </div>
   );
 };

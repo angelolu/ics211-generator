@@ -176,16 +176,6 @@ export const ActivityStatusBadges: React.FC<ActivityStatusBadgesProps> = ({
         {TYPE_LABELS[activityType] || 'Activity'}
       </Badge>
 
-      <Badge
-        variant={isPast ? 'secondary' : 'outline'}
-        className={`h-7 px-2.5 text-xs font-bold ${isPast
-            ? 'text-slate-600 bg-slate-100 border-slate-200'
-            : 'border-emerald-300 bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800'
-          }`}
-      >
-        {isPast ? 'Completed' : 'Upcoming / Active'}
-      </Badge>
-
       {canRespondToEvent ? (
         <DropdownMenu.Root>
           <DropdownMenu.Trigger asChild>

@@ -43,8 +43,8 @@ function formatValidityPeriod(startIso: string, endIso: string): string {
 
 // ── Shared tile style constants ──────────────────────────────────
 const TILE_STYLE: React.CSSProperties = {
-  background: 'var(--slate-2)',
-  border: '1px solid var(--slate-4)',
+  background: 'var(--slate-1)',
+  border: '1px solid var(--slate-3)',
   borderRadius: 12,
   padding: '10px 12px',
   display: 'flex',
@@ -55,7 +55,7 @@ const TILE_STYLE: React.CSSProperties = {
   boxSizing: 'border-box',
   flex: '1 1 130px',
   minWidth: 0,
-  transition: 'all 0.2s cubic-bezier(0.16, 1, 0.3, 1)',
+  transition: 'all 0.15s ease',
 };
 const TILE_LABEL_ROW: React.CSSProperties = {
   display: 'flex',
@@ -153,16 +153,15 @@ export const ActivityWeatherConditions: React.FC<ActivityWeatherConditionsProps>
     if (status === 'heat-danger') label = 'Extreme Heat';
     if (status === 'high-hazard') label = 'High Wind Hazard';
     if (status === 'dense-fog') label = 'Dense Fog';
-    if (status === 'heavy') label = 'Heavy Rain';
+    if (status === 'heavy') label = 'Rain';
 
     return (
       <Badge
         variant={isDanger ? 'destructive' : 'secondary'}
-        className={`h-4.5 text-[0.625rem] px-1.5 font-bold uppercase ${
-          isDanger
+        className={`h-4.5 text-[0.625rem] px-1.5 font-bold uppercase ${isDanger
             ? ''
             : 'border-amber-300 bg-amber-50 text-amber-800 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-800'
-        }`}
+          }`}
       >
         {label}
       </Badge>

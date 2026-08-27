@@ -137,7 +137,7 @@ export async function fetchNOAAWeather(
 
   try {
     const headers = {
-      'User-Agent': 'SAR211App (ICS-211 Field Activity Manager, contact@sar.org)',
+      'User-Agent': 'RosterApp (D4H Companion & Roster Manager, contact@sar.org)',
       Accept: 'application/geo+json, application/json',
     };
 

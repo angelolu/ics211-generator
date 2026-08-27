@@ -20,6 +20,7 @@ import {
   getActivityAttachmentPreviewBlobUrl,
   formatFileSize,
 } from '../api/d4h';
+import { cn } from '@/lib/utils';
 
 interface ActivityAttachmentsCardProps {
   contextId: number;
@@ -27,6 +28,7 @@ interface ActivityAttachmentsCardProps {
   activityType?: string;
   isLocal?: boolean;
   style?: React.CSSProperties;
+  className?: string;
 }
 
 function isAttachmentPhoto(att: ActivityAttachment, filename: string): boolean {
@@ -232,7 +234,18 @@ const AttachmentPhotoPopover: React.FC<{
     return () => clearTimers();
   }, [clearTimers]);
 
+  const isMobileDevice = () => {
+    if (typeof window === 'undefined') return false;
+    return (
+      window.matchMedia('(pointer: coarse)').matches ||
+      window.matchMedia('(max-width: 768px)').matches ||
+      'ontouchstart' in window ||
+      navigator.maxTouchPoints > 0
+    );
+  };
+
   const handleMouseEnter = () => {
+    if (isMobileDevice()) return;
     if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
     openTimerRef.current = setTimeout(() => {
       setOpen(true);
@@ -252,6 +265,10 @@ const AttachmentPhotoPopover: React.FC<{
 
   const handleTriggerClick = (e: React.MouseEvent) => {
     e.stopPropagation();
+    // Only allow clicking to trigger preview on mobile/touch devices
+    if (!isMobileDevice()) {
+      return;
+    }
     clearTimers();
     setOpen((prev) => !prev);
   };
@@ -318,6 +335,7 @@ export const ActivityAttachmentsCard: React.FC<ActivityAttachmentsCardProps> = (
   activityType,
   isLocal = false,
   style,
+  className,
 }) => {
   const activityId = activity?.id;
 
@@ -392,7 +410,7 @@ export const ActivityAttachmentsCard: React.FC<ActivityAttachmentsCardProps> = (
 
   return (
     <div
-      className="card activity-info-card"
+      className={cn("card activity-info-card", className)}
       style={{
         padding: '22px 24px',
         display: 'flex',
@@ -456,7 +474,6 @@ export const ActivityAttachmentsCard: React.FC<ActivityAttachmentsCardProps> = (
 
           const tileContent = (
             <div
-              onClick={(e) => handleDownload(att, e)}
               style={{
                 display: 'flex',
                 alignItems: 'center',
@@ -465,19 +482,23 @@ export const ActivityAttachmentsCard: React.FC<ActivityAttachmentsCardProps> = (
                 borderRadius: 8,
                 background: 'var(--slate-1)',
                 border: '1px solid var(--slate-3)',
-                cursor: 'pointer',
+                cursor: isPhoto ? 'pointer' : 'default',
                 transition: 'all 0.15s ease',
                 gap: 10,
               }}
               onMouseEnter={(e) => {
-                e.currentTarget.style.background = 'var(--slate-2)';
-                e.currentTarget.style.borderColor = 'var(--navy-6)';
+                if (isPhoto) {
+                  e.currentTarget.style.background = 'var(--slate-2)';
+                  e.currentTarget.style.borderColor = 'var(--navy-6)';
+                }
               }}
               onMouseLeave={(e) => {
-                e.currentTarget.style.background = 'var(--slate-1)';
-                e.currentTarget.style.borderColor = 'var(--slate-3)';
+                if (isPhoto) {
+                  e.currentTarget.style.background = 'var(--slate-1)';
+                  e.currentTarget.style.borderColor = 'var(--slate-3)';
+                }
               }}
-              title={`Click to download ${filename}`}
+              title={filename}
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, flex: 1 }}>
                 {/* File Icon Badge */}
@@ -524,7 +545,7 @@ export const ActivityAttachmentsCard: React.FC<ActivityAttachmentsCardProps> = (
                 type="button"
                 variant="outline"
                 size="sm"
-                className="size-7 p-0 shrink-0"
+                className="size-7 p-0 shrink-0 cursor-pointer"
                 onClick={(e) => handleDownload(att, e)}
                 title={`Download ${filename}`}
               >

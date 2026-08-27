@@ -738,6 +738,17 @@ html, body {
   opacity: 0.95;
 }
 
+.calendar-event-pill.is-past {
+  opacity: 0.75;
+  filter: saturate(0.65);
+}
+
+.calendar-event-pill.is-past:hover,
+.calendar-event-pill.is-past.is-hovered {
+  opacity: 0.95;
+  filter: saturate(0.85);
+}
+
 .calendar-event-pill-exercise {
   background: var(--navy-1);
   color: var(--navy-9);
@@ -865,7 +876,7 @@ html, body {
 /* ── Mobile Responsiveness (< 640px) ──────────────────── */
 @media (max-width: 640px) {
   .dashboard-main {
-    padding: 14px 12px 28px !important;
+    padding: 0 12px 28px !important;
     width: 100% !important;
     max-width: 100% !important;
     box-sizing: border-box !important;
@@ -904,32 +915,7 @@ html, body {
   }
 
   .dashboard-controls {
-    display: flex !important;
-    flex-direction: row !important;
-    flex-wrap: wrap !important;
-    align-items: center !important;
-    justifyContent: space-between !important;
-    gap: 8px !important;
-    width: 100% !important;
-    max-width: 100% !important;
-    box-sizing: border-box !important;
-  }
-
-  .dashboard-switcher-row {
-    display: flex !important;
-    align-items: center !important;
-    width: auto !important;
-    max-width: 100% !important;
-    gap: 8px !important;
-  }
-
-  .dashboard-filter-row {
-    display: flex !important;
-    align-items: center !important;
-    width: auto !important;
-    max-width: 100% !important;
-    padding-bottom: 0 !important;
-    margin-left: auto !important;
+    display: none !important;
   }
 
   .activity-card {
@@ -1004,22 +990,6 @@ html, body {
 }
 
 @media (max-width: 899px) {
-  .activity-info-desc-col {
-    width: 100%;
-    display: flex;
-    flex-direction: column;
-    gap: 20px;
-    order: 2;
-  }
-
-  .activity-info-meta-col {
-    width: 100%;
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-    gap: 20px;
-    order: 1;
-  }
-
   .map-fit-all-btn {
     display: none !important;
   }
@@ -1229,4 +1199,10 @@ html, body {
   html {
     @apply font-sans;
   }
+}
+
+.activity-info-desc-content,
+.activity-info-preplan-content {
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }

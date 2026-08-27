@@ -163,6 +163,10 @@ export interface Activity {
   reference?: string;
   referenceDescription?: string;
   description?: string;
+  plan?: string;
+  prePlan?: string;
+  pre_plan?: string;
+  preplan?: string;
   startsAt: string;
   endsAt: string;
   address?: {
