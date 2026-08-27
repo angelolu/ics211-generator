@@ -217,7 +217,7 @@ function DashboardActionBar({
           {/* Mobile Filter Button (only shown in mobile activities view) */}
           {viewMode === 'activities' && (
             <div className="sm:hidden">
-              <DropdownMenu.Root>
+              <DropdownMenu.Root modal={false}>
                 <DropdownMenu.Trigger asChild>
                   <Button
                     variant="outline"
@@ -291,7 +291,7 @@ function DashboardActionBar({
 
           {/* Mobile 3-Dot More Menu (View Mode Switcher + Actions) */}
           <div className="sm:hidden">
-            <DropdownMenu.Root>
+            <DropdownMenu.Root modal={false}>
               <DropdownMenu.Trigger asChild>
                 <Button
                   variant="ghost"
@@ -657,7 +657,7 @@ export function Dashboard() {
     <Tooltip.Provider delayDuration={400}>
       <div className="app-bg" style={{ minHeight: '100vh' }}>
         {/* ── Header ───────────────────────────────────────── */}
-        <header className="app-header">
+        <header className="app-header select-none">
           <div className="w-full max-w-[1200px] mx-auto px-3 sm:px-6 h-[60px] flex items-center justify-between gap-2.5">
             <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
               <div style={{
@@ -678,7 +678,7 @@ export function Dashboard() {
             </div>
 
             <div className="flex items-center gap-2 shrink-0">
-              <DropdownMenu.Root>
+              <DropdownMenu.Root modal={false}>
                 <DropdownMenu.Trigger asChild>
                   <Button
                     variant="ghost"
@@ -1016,7 +1016,7 @@ export function Dashboard() {
                     <div
                       key={roster.id}
                       className={cn(
-                        "card card-interactive activity-card animate-slide-up group flex items-center gap-3 sm:gap-4 p-3 sm:p-4 rounded-xl border border-[var(--slate-4)] hover:border-[var(--navy-6)] bg-white hover:bg-[var(--slate-1)] dark:bg-[var(--slate-2)] transition-all duration-150 cursor-pointer shadow-xs min-w-0 max-w-full overflow-hidden",
+                        "card card-interactive activity-card animate-slide-up group flex items-center gap-3 sm:gap-4 p-3 sm:p-4 rounded-xl border border-[var(--slate-4)] hover:border-[var(--navy-6)] bg-white hover:bg-[var(--slate-1)] dark:bg-[var(--slate-2)] transition-all duration-150 cursor-pointer shadow-xs min-w-0 max-w-full overflow-hidden select-none",
                         isPast && "opacity-80 saturate-[0.9]"
                       )}
                       style={{ animationDelay: `${idx * 25}ms`, animationFillMode: 'both' }}
@@ -1493,7 +1493,7 @@ function ActivityCard({
     <div
       id={`activity-card-${activity.id}`}
       className={cn(
-        "card card-interactive activity-card animate-slide-up group flex items-center gap-3 sm:gap-4 p-3 sm:p-4 rounded-xl border border-[var(--slate-4)] hover:border-[var(--navy-6)] bg-white hover:bg-[var(--slate-1)] dark:bg-[var(--slate-2)] transition-all duration-150 cursor-pointer shadow-xs min-w-0 max-w-full overflow-hidden",
+        "card card-interactive activity-card animate-slide-up group flex items-center gap-3 sm:gap-4 p-3 sm:p-4 rounded-xl border border-[var(--slate-4)] hover:border-[var(--navy-6)] bg-white hover:bg-[var(--slate-1)] dark:bg-[var(--slate-2)] transition-all duration-150 cursor-pointer shadow-xs min-w-0 max-w-full overflow-hidden select-none",
         isPast && "opacity-80 saturate-[0.9]"
       )}
       style={{

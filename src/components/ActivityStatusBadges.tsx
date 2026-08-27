@@ -177,7 +177,7 @@ export const ActivityStatusBadges: React.FC<ActivityStatusBadgesProps> = ({
       </Badge>
 
       {canRespondToEvent ? (
-        <DropdownMenu.Root>
+        <DropdownMenu.Root modal={false}>
           <DropdownMenu.Trigger asChild>
             <button
               disabled={isUpdatingStatus}

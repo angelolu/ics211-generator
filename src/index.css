@@ -155,6 +155,13 @@ html, body {
   transition: box-shadow 0.2s ease, border-color 0.2s ease, transform 0.15s ease;
 }
 
+.card-interactive,
+.activity-card {
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
 .card-interactive:hover {
   box-shadow: 0 6px 20px rgba(6, 27, 68, 0.1);
   border-color: var(--navy-3);
@@ -436,6 +443,9 @@ html, body {
   position: sticky;
   top: 0;
   z-index: 50;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
 }
 
 /* ── Radix Dialog ─────────────────────────────────────── */

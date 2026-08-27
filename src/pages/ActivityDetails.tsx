@@ -139,6 +139,11 @@ export function ActivityDetails() {
 
   useEffect(() => {
     window.scrollTo({ top: 0, behavior: 'instant' });
+    try {
+      window.getSelection()?.removeAllRanges();
+    } catch {
+      // ignore
+    }
   }, [id]);
 
   useEffect(() => {
@@ -460,7 +465,7 @@ export function ActivityDetails() {
       >
 
         {/* ── Header ─────────────────────────────────────── */}
-        <header className="app-header no-print">
+        <header className="app-header no-print select-none">
           <div
             style={{
               maxWidth: 1300,
@@ -471,6 +476,8 @@ export function ActivityDetails() {
               alignItems: 'center',
               justifyContent: 'space-between',
               gap: 12,
+              userSelect: 'none',
+              WebkitUserSelect: 'none',
             }}
           >
             {/* Left: back + title */}
@@ -481,7 +488,7 @@ export function ActivityDetails() {
                     variant="ghost"
                     size="sm"
                     onClick={() => navigate('/dashboard')}
-                    className="size-8 p-0 bg-white/10 hover:bg-white/20 text-white/90 hover:text-white border border-white/15 rounded-md"
+                    className="size-8 p-0 bg-white/10 hover:bg-white/20 text-white/90 hover:text-white border border-white/15 rounded-md select-none"
                   >
                     <ArrowLeft size={16} />
                   </Button>
@@ -491,7 +498,7 @@ export function ActivityDetails() {
                 </Tooltip.Portal>
               </Tooltip.Root>
 
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, userSelect: 'none', WebkitUserSelect: 'none' }}>
                 <span
                   style={{
                     fontWeight: 700,
@@ -501,6 +508,8 @@ export function ActivityDetails() {
                     textOverflow: 'ellipsis',
                     whiteSpace: 'nowrap',
                     letterSpacing: '-0.01em',
+                    userSelect: 'none',
+                    WebkitUserSelect: 'none',
                   }}
                 >
                   {activityName}
@@ -652,7 +661,7 @@ export function ActivityDetails() {
                 </Button>
 
                 {/* 2. Traffic / Departure Window Selector */}
-                <DropdownMenu.Root>
+                <DropdownMenu.Root modal={false}>
                   <DropdownMenu.Trigger asChild>
                     <Button
                       variant="outline"
@@ -785,7 +794,7 @@ export function ActivityDetails() {
             {(!isD4HConnected || activeView === 'roster') && (
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginLeft: 'auto' }}>
                 {/* Options dropdown */}
-                <DropdownMenu.Root>
+                <DropdownMenu.Root modal={false}>
                   <DropdownMenu.Trigger asChild>
                     <Button
                       variant={hasConflicts ? 'destructive' : 'outline'}
@@ -978,7 +987,7 @@ export function ActivityDetails() {
                 </DropdownMenu.Root>
 
                 {/* Export dropdown */}
-                <DropdownMenu.Root>
+                <DropdownMenu.Root modal={false}>
                   <DropdownMenu.Trigger asChild>
                     <Button
                       variant="default"
@@ -1115,7 +1124,7 @@ export function ActivityDetails() {
 
                   <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
                     {/* Form type dropdown (styled like traffic dropdown) */}
-                    <DropdownMenu.Root>
+                    <DropdownMenu.Root modal={false}>
                       <DropdownMenu.Trigger asChild>
                         <Button
                           variant="outline"
@@ -1181,7 +1190,7 @@ export function ActivityDetails() {
                     </DropdownMenu.Root>
 
                     {/* Data-driven column toggles dropdown */}
-                    <DropdownMenu.Root>
+                    <DropdownMenu.Root modal={false}>
                       <DropdownMenu.Trigger asChild>
                         <Button
                           variant="outline"
