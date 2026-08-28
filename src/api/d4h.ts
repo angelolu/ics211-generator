@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { addDays, differenceInCalendarDays, isSameDay, subDays } from 'date-fns';
+import { toast } from 'sonner';
 import { safeSetLocalStorageItem } from './storage';
 
 const BASE_URL = 'https://api.team-manager.us.d4h.com/v3';
@@ -30,13 +31,35 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
+let lastToastTime = 0;
+
+export function showD4HErrorToast(err: any, fallback = 'Failed to communicate with D4H') {
+  // Prevent spamming multiple toasts within 2 seconds
+  const now = Date.now();
+  if (now - lastToastTime < 2000) return;
+  lastToastTime = now;
+
+  const details = getD4HErrorDetails(err, fallback);
+  toast.error(details.title, {
+    description: details.debugSnippet ? `${details.message} (${details.debugSnippet})` : details.message,
+    duration: 5000,
+  });
+}
+
 api.interceptors.response.use(
   (response) => response,
   async (error) => {
-    if (error.response && error.response.status === 401) {
+    const status = error.response?.status;
+    const isAuthError = status === 401 || (status === 403 && !localStorage.getItem('d4h_token'));
+
+    // 1. Auth issue: Immediately take action without retry delay
+    if (isAuthError) {
       localStorage.removeItem('d4h_token');
       localStorage.removeItem('d4h_context_id');
       localStorage.removeItem('d4h_team_title');
+      localStorage.removeItem('d4h_member_id');
+      localStorage.removeItem('d4h_member_name');
+      localStorage.removeItem('d4h_team_subdomain');
 
       if (!window.location.pathname.includes('/connect-d4h')) {
         const baseUrl = import.meta.env.BASE_URL || '/';
@@ -46,62 +69,142 @@ api.interceptors.response.use(
       return Promise.reject(error);
     }
 
-    // Handle 429 Rate Limiting with retry
-    if (error.response && error.response.status === 429 && !error.config._retry) {
-      error.config._retry = true;
-      const retryAfterHeader = error.response.headers['retry-after'];
-      const delaySec = retryAfterHeader ? parseInt(retryAfterHeader, 10) : 10;
-      const delayMs = (!isNaN(delaySec) && delaySec > 0 ? delaySec : 10) * 1000;
-      console.warn(`[D4H API] Rate limited (429). Retrying in ${delayMs / 1000}s...`);
-      await new Promise(resolve => setTimeout(resolve, delayMs));
-      return api.request(error.config);
+    // 2. Non-auth errors (e.g. 429 rate limit, 5xx server errors, network disconnect, timeouts):
+    // Retry once after a few seconds
+    const config = error.config;
+    if (config && !config._retry) {
+      config._retry = true;
+
+      let delayMs = 2500; // default 2.5 seconds
+      if (status === 429) {
+        const retryAfterHeader = error.response?.headers?.['retry-after'];
+        const delaySec = retryAfterHeader ? parseInt(retryAfterHeader, 10) : 3;
+        delayMs = (!isNaN(delaySec) && delaySec > 0 ? delaySec : 3) * 1000;
+      }
+
+      console.warn(
+        `[D4H API] Request failed (${status || error.code || error.message}) for ${config.url || ''}. Retrying in ${delayMs / 1000}s...`
+      );
+
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      return api.request(config);
+    }
+
+    // After retry attempt failed or non-retriable: show concise error toast if outside connect page
+    if (!window.location.pathname.includes('/connect-d4h')) {
+      showD4HErrorToast(error);
     }
 
     return Promise.reject(error);
   }
 );
 
-export function getD4HErrorMessage(err: any, fallback = 'Failed to connect to D4H'): string {
-  if (!err) return fallback;
+export interface D4HErrorDetails {
+  title: string;
+  message: string;
+  debugSnippet?: string;
+  isAuthError?: boolean;
+}
 
-  // Explicit message provided in D4H response body
-  const serverMsg = err.response?.data?.message || err.response?.data?.error || err.response?.data?.error_description;
-  if (serverMsg && typeof serverMsg === 'string' && serverMsg.trim()) {
-    return serverMsg;
+export function getD4HErrorDetails(err: any, fallback = 'Failed to connect to D4H'): D4HErrorDetails {
+  if (!err) {
+    return {
+      title: 'Connection Error',
+      message: fallback,
+    };
   }
 
-  // HTTP status code handling
+  if (typeof err === 'object' && 'title' in err && 'message' in err) {
+    return err as D4HErrorDetails;
+  }
+
   const status = err.response?.status;
+  const method = (err.config?.method || 'GET').toUpperCase();
+  const url = err.config?.url || '';
+  const serverMsg = err.response?.data?.message || err.response?.data?.error || err.response?.data?.error_description || (typeof err.response?.data === 'string' ? err.response.data : '');
+  const errorCode = err.code || err.name;
+
+  // Construct technical snippet for debugging: only HTTP error/code and endpoint
+  const debugParts: string[] = [];
+  if (status) {
+    debugParts.push(`HTTP ${status}`);
+  } else if (errorCode) {
+    debugParts.push(errorCode);
+  }
+
+  if (url) {
+    debugParts.push(`${method} ${url}`);
+  }
+
+  const debugSnippet = debugParts.join(' • ') || undefined;
+
   if (status === 401) {
-    return 'Invalid or expired personal access token. Please verify your token at myaccount.us.d4h.com and try again.';
+    return {
+      title: 'Session Expired',
+      message: 'Your D4H login or access token is no longer valid. Please reconnect your account.',
+      debugSnippet,
+      isAuthError: true,
+    };
   }
+
   if (status === 403) {
-    return 'Access forbidden. Your D4H token does not have permission to access this team or resource.';
+    return {
+      title: 'Access Restricted',
+      message: 'Your account does not have permission for this D4H resource.',
+      debugSnippet,
+      isAuthError: true,
+    };
   }
+
   if (status === 404) {
-    return 'D4H resource or team organization not found. Please verify your account configuration.';
+    return {
+      title: 'Resource Not Found',
+      message: 'The requested activity or team information was not found on D4H.',
+      debugSnippet,
+    };
   }
+
   if (status === 429) {
-    return 'D4H API rate limit reached. Please wait a few seconds and try again.';
+    return {
+      title: 'Too Many Requests',
+      message: 'D4H request limit reached. Please wait a moment before trying again.',
+      debugSnippet,
+    };
   }
+
   if (status >= 500) {
-    return 'D4H servers returned an error. Please try again in a few moments.';
+    return {
+      title: 'D4H Service Unavailable',
+      message: 'D4H servers encountered a problem and could not process the request. Please try again shortly.',
+      debugSnippet,
+    };
   }
 
-  // Axios network error / CORS / Connection error
   if (err.message === 'Network Error' || err.code === 'ERR_NETWORK') {
-    return 'There was an error. This can happen if the token is invalid, your device is offline, or the connection was blocked.';
+    return {
+      title: 'Network Connection Issue',
+      message: 'Unable to reach D4H. Please check your internet connection and refresh.',
+      debugSnippet,
+    };
   }
+
   if (err.code === 'ECONNABORTED' || err.message?.toLowerCase().includes('timeout')) {
-    return 'Request to D4H timed out. Please check your internet connection and try again.';
+    return {
+      title: 'Request Timed Out',
+      message: 'D4H didn\'t respond. Please check your internet connection and try again.',
+      debugSnippet,
+    };
   }
 
-  // Custom client-side Error instance
-  if (err.message && typeof err.message === 'string' && err.message !== 'Network Error') {
-    return err.message;
-  }
+  return {
+    title: 'Unable to Load Data',
+    message: serverMsg || (err.message && err.message !== 'Network Error' ? err.message : fallback),
+    debugSnippet,
+  };
+}
 
-  return fallback;
+export function getD4HErrorMessage(err: any, fallback = 'Failed to connect to D4H'): string {
+  return getD4HErrorDetails(err, fallback).message;
 }
 
 export interface WhoAmIResponse {
@@ -541,15 +644,141 @@ export const verifyTokenAndGetContext = async (): Promise<{ contextId: number; t
   return { contextId: member.owner.id, title: member.owner.title };
 };
 
+export interface MissingPermissionItem {
+  id: string;
+  name: string;
+  impact: string;
+}
+
+export function checkUserPermissions(member?: any): MissingPermissionItem[] {
+  if (!member) return [];
+
+  // If user is Admin or Owner, they have full permissions
+  if (
+    member.permission === 'Admin' ||
+    member.role?.permission === 'Admin' ||
+    member.role?.title?.toLowerCase() === 'admin' ||
+    member.role?.title?.toLowerCase() === 'owner'
+  ) {
+    return [];
+  }
+
+  const perms = member.permissions;
+  if (!perms || typeof perms !== 'object') {
+    return [];
+  }
+
+  const missing: MissingPermissionItem[] = [];
+
+  // 1. Activities (Exercises, Events, Incidents)
+  const hasExercise = Boolean(perms.Exercise?.READ || perms.Exercise?.INDEX || perms.Exercise?.UPDATE || perms.Exercise === true);
+  const hasEvent = Boolean(perms.Event?.READ || perms.Event?.INDEX || perms.Event?.UPDATE || perms.Event === true);
+  const hasIncident = Boolean(perms.Incident?.READ || perms.Incident?.INDEX || perms.Incident?.UPDATE || perms.Incident === true);
+
+  if (!hasExercise && !hasEvent && !hasIncident) {
+    missing.push({
+      id: 'activities',
+      name: 'Activities (Exercises, Events, Incidents)',
+      impact: 'Cannot view scheduled activities or events on the calendar and dashboard.',
+    });
+  } else {
+    if (!hasExercise) {
+      missing.push({
+        id: 'exercise',
+        name: 'Exercises (Read)',
+        impact: 'Exercises will not appear on your dashboard or calendar.',
+      });
+    }
+    if (!hasEvent) {
+      missing.push({
+        id: 'event',
+        name: 'Events (Read)',
+        impact: 'Events will not appear on your dashboard or calendar.',
+      });
+    }
+    if (!hasIncident) {
+      missing.push({
+        id: 'incident',
+        name: 'Incidents (Read)',
+        impact: 'Incidents will not appear on your dashboard or calendar.',
+      });
+    }
+  }
+
+  // 2. Attendance
+  const hasAttendance = Boolean(
+    perms.ActivityAttendance?.READ ||
+    perms.ActivityAttendance?.INDEX ||
+    perms.ActivityAttendance?.UPDATEOWN ||
+    perms.ActivityAttendance?.CREATE ||
+    perms.ActivityAttendance === true
+  );
+  if (!hasAttendance) {
+    missing.push({
+      id: 'attendance',
+      name: 'Activity Attendance (Read / Respond)',
+      impact: 'Cannot view who is attending activities or update your attendance status.',
+    });
+  }
+
+  // 3. Members / Personnel
+  const hasMember = Boolean(perms.Member?.READ || perms.Member?.INDEX || perms.Member === true);
+  if (!hasMember) {
+    missing.push({
+      id: 'member',
+      name: 'Personnel / Members (Read)',
+      impact: 'Cannot view team roster details, contact cards, or calculate carpool routes.',
+    });
+  }
+
+  // 4. Qualifications
+  const hasQual = Boolean(
+    perms.Qualification?.READ ||
+    perms.Qualification?.INDEX ||
+    perms.MemberQualification?.READ ||
+    perms.Qualification === true ||
+    perms.MemberQualification === true
+  );
+  if (!hasQual) {
+    missing.push({
+      id: 'qualification',
+      name: 'Qualifications (Read)',
+      impact: 'Member fitness qualifications will not load in roster tables.',
+    });
+  }
+
+  return missing;
+}
+
+export const checkCurrentUserMissingPermissions = async (
+  contextId?: number | string
+): Promise<MissingPermissionItem[]> => {
+  try {
+    const res = await api.get<WhoAmIResponse>('/whoami');
+    const targetContextId = contextId ? Number(contextId) : null;
+    const member = targetContextId
+      ? res.data.members?.find((m) => m.owner.id === targetContextId)
+      : res.data.members?.find((m) => m.owner.resourceType === 'Team') || res.data.members?.[0];
+
+    return checkUserPermissions(member);
+  } catch {
+    return [];
+  }
+};
+
 export interface CurrentUserMemberInfo {
   memberId: number;
   name?: string;
+  missingPermissions?: MissingPermissionItem[];
 }
 
-export const getCurrentUserMemberInfo = async (contextId?: number | string): Promise<CurrentUserMemberInfo | null> => {
+export const getCurrentUserMemberInfo = async (
+  contextId?: number | string,
+  checkPermissions = false
+): Promise<CurrentUserMemberInfo | null> => {
   const cachedMemberId = localStorage.getItem('d4h_member_id');
   const cachedMemberName = localStorage.getItem('d4h_member_name');
-  if (cachedMemberId) {
+  if (cachedMemberId && !checkPermissions) {
     const id = parseInt(cachedMemberId, 10);
     if (!isNaN(id)) {
       return { memberId: id, name: cachedMemberName || undefined };
@@ -568,7 +797,8 @@ export const getCurrentUserMemberInfo = async (contextId?: number | string): Pro
       if (member.name) {
         localStorage.setItem('d4h_member_name', member.name);
       }
-      return { memberId: member.id, name: member.name };
+      const missingPermissions = checkUserPermissions(member);
+      return { memberId: member.id, name: member.name, missingPermissions };
     }
   } catch (e) {
     if (import.meta.env.DEV) {
@@ -626,6 +856,8 @@ export const getCurrentUserAttendingActivityIds = async (
       if (import.meta.env.DEV) {
         console.warn('[D4H API] Failed to fetch current user attendance:', e);
       }
+      // Negative cache for full TTL to avoid repeated failed 403 requests on month navigation
+      userAttendanceCache.set(cacheKey, { ids: new Set<number>(), cachedAt: Date.now() });
       return new Set<number>();
     }
   });
@@ -723,11 +955,31 @@ export const getActivities = async (
       size: 250,
     };
 
+    let exError: any = null;
+    let evError: any = null;
+    let inError: any = null;
+
     const [exercisesRes, eventsRes, incidentsRes] = await Promise.all([
-      api.get<{ results: Activity[] }>(`/team/${contextId}/exercises`, { params }).catch((e) => { console.warn('Failed to fetch exercises:', e); return { data: { results: [] } }; }),
-      api.get<{ results: Activity[] }>(`/team/${contextId}/events`, { params }).catch((e) => { console.warn('Failed to fetch events:', e); return { data: { results: [] } }; }),
-      api.get<{ results: Activity[] }>(`/team/${contextId}/incidents`, { params }).catch((e) => { console.warn('Failed to fetch incidents:', e); return { data: { results: [] } }; }),
+      api.get<{ results: Activity[] }>(`/team/${contextId}/exercises`, { params }).catch((e) => {
+        exError = e;
+        console.warn('Failed to fetch exercises:', e);
+        return { data: { results: [] } };
+      }),
+      api.get<{ results: Activity[] }>(`/team/${contextId}/events`, { params }).catch((e) => {
+        evError = e;
+        console.warn('Failed to fetch events:', e);
+        return { data: { results: [] } };
+      }),
+      api.get<{ results: Activity[] }>(`/team/${contextId}/incidents`, { params }).catch((e) => {
+        inError = e;
+        console.warn('Failed to fetch incidents:', e);
+        return { data: { results: [] } };
+      }),
     ]);
+
+    if (exError && evError && inError) {
+      throw (exError || evError || inError);
+    }
 
     const exercises = (exercisesRes.data.results || []).map(r => ({ ...r, type: 'exercise' as const }));
     const events = (eventsRes.data.results || []).map(r => ({ ...r, type: 'event' as const }));
@@ -1699,8 +1951,8 @@ export function canUserRespondToActivity(params: CanUserRespondParams): boolean 
     actType === 'incident'
       ? userPermissions.canUpdateIncident
       : actType === 'event'
-      ? userPermissions.canUpdateEvent
-      : userPermissions.canUpdateExercise;
+        ? userPermissions.canUpdateEvent
+        : userPermissions.canUpdateExercise;
 
   const hasCreatePermission =
     userPermissions.canCreateAttendance || userPermissions.canUpdateAllAttendance || hasActivityAdminPermission;
@@ -1865,7 +2117,7 @@ export const getActivityAttachmentPreviewBlobUrl = async (
         attachmentBlobCache.set(attachmentId, url);
         return url;
       }
-    } catch {}
+    } catch { }
   }
   return null;
 };

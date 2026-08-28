@@ -41,10 +41,12 @@ import {
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { formatActivityLocation, getActivities, getCurrentUserAttendingActivityIds, getCurrentUserMemberInfo, getD4HErrorMessage, logCurrentUserInfo } from '../api/d4h';
-import type { Activity } from '../api/d4h';
+import { formatActivityLocation, getActivities, getCurrentUserAttendingActivityIds, getCurrentUserMemberInfo, getD4HErrorDetails, logCurrentUserInfo } from '../api/d4h';
+import type { Activity, D4HErrorDetails, MissingPermissionItem } from '../api/d4h';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { ActivityPopover } from '../components/ActivityPopover';
+import { D4HErrorAlert } from '../components/D4HErrorAlert';
+import { D4HPermissionsModal } from '../components/D4HPermissionsModal';
 
 type FilterType = 'all' | 'exercise' | 'event' | 'incident';
 export type ActivityCardType = 'exercise' | 'event' | 'incident' | 'local';
@@ -404,7 +406,9 @@ export function Dashboard() {
   const [activities, setActivities] = useState<Activity[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [filter, setFilter] = useState<FilterType>('all');
-  const [error, setError] = useState('');
+  const [errorDetails, setErrorDetails] = useState<D4HErrorDetails | null>(null);
+  const [missingPermissions, setMissingPermissions] = useState<MissingPermissionItem[]>([]);
+  const [showPermissionsModal, setShowPermissionsModal] = useState(false);
   const navigate = useNavigate();
 
   const teamTitle = localStorage.getItem('d4h_team_title') || 'Your Team';
@@ -423,7 +427,14 @@ export function Dashboard() {
     const saved = localStorage.getItem('fitnessqual_view_mode');
     return (saved === 'activities' || saved === 'local') ? saved : 'activities';
   });
-  const [activitiesView, setActivitiesView] = useState<'list' | 'calendar'>('calendar');
+  const [activitiesView, setActivitiesView] = useState<'list' | 'calendar'>(() => {
+    try {
+      const saved = localStorage.getItem('fitnessqual_activities_view');
+      return (saved === 'list' || saved === 'calendar') ? saved : 'calendar';
+    } catch {
+      return 'calendar';
+    }
+  });
   const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' && window.innerWidth < 640);
 
   useEffect(() => {
@@ -435,7 +446,13 @@ export function Dashboard() {
   }, []);
 
   const effectiveActivitiesView = isMobile ? 'list' : activitiesView;
-  const [currentMonth, setCurrentMonth] = useState<Date>(() => sessionSelectedMonth || new Date());
+  const [currentMonth, setCurrentMonth] = useState<Date>(() => {
+    if (sessionSelectedMonth) {
+      return sessionSelectedMonth;
+    }
+    return new Date();
+  });
+
   const [attendingActivityIds, setAttendingActivityIds] = useState<Set<number>>(new Set());
   const hasAutoScrolledRef = useRef(false);
 
@@ -474,13 +491,28 @@ export function Dashboard() {
   useEffect(() => {
     if (contextId) {
       logCurrentUserInfo();
-      getCurrentUserMemberInfo(contextId).then(info => {
+      getCurrentUserMemberInfo(contextId, true).then(info => {
         if (info?.name) {
           setUserName(info.name);
+        }
+        if (info?.missingPermissions && info.missingPermissions.length > 0) {
+          const dismissedKey = `fitnessqual_dismissed_perms_${contextId}`;
+          const isDismissed = sessionStorage.getItem(dismissedKey);
+          if (!isDismissed) {
+            setMissingPermissions(info.missingPermissions);
+            setShowPermissionsModal(true);
+          }
         }
       });
     }
   }, [contextId]);
+
+  const handleDismissPermissionsModal = () => {
+    if (contextId) {
+      sessionStorage.setItem(`fitnessqual_dismissed_perms_${contextId}`, 'true');
+    }
+    setShowPermissionsModal(false);
+  };
 
   const handleCreateLocalRoster = () => {
     try {
@@ -503,7 +535,7 @@ export function Dashboard() {
       return;
     }
     if (!quiet) setIsLoading(true);
-    setError('');
+    setErrorDetails(null);
     try {
       const options = getMonthQueryOptions(targetMonth);
       const contextIdNum = parseInt(contextId, 10);
@@ -521,9 +553,9 @@ export function Dashboard() {
         localStorage.removeItem('d4h_member_name');
         setContextId(null);
         setViewMode('local');
-        setError('D4H session expired or invalid. Switched to offline mode.');
+        setErrorDetails(getD4HErrorDetails(err, 'D4H session expired or invalid. Switched to offline mode.'));
       } else {
-        setError(getD4HErrorMessage(err, 'Failed to load activities. Please try again.'));
+        setErrorDetails(getD4HErrorDetails(err, 'Failed to load activities. Please try again.'));
       }
     } finally {
       setIsLoading(false);
@@ -639,6 +671,18 @@ export function Dashboard() {
       window.scrollTo({ top: Math.max(0, top), behavior: 'smooth' });
     }
   }, [effectiveActivitiesView, filtered]);
+
+  const handleActivitiesViewChange = (mode: 'list' | 'calendar') => {
+    setActivitiesView(mode);
+    try {
+      localStorage.setItem('fitnessqual_activities_view', mode);
+    } catch (e) {
+      console.error('Failed to save activities view preference', e);
+    }
+    if (isSameMonth(currentMonth, new Date())) {
+      setTimeout(scrollToTodayOrNearestEvent, 60);
+    }
+  };
 
   useEffect(() => {
     if (isLoading || hasAutoScrolledRef.current) return;
@@ -819,7 +863,7 @@ export function Dashboard() {
                 {/* Calendar / List View Switcher (Desktop/Tablet Only) */}
                 <Tabs
                   value={activitiesView}
-                  onValueChange={(v) => { if (v) setActivitiesView(v as 'list' | 'calendar'); }}
+                  onValueChange={(v) => { if (v === 'list' || v === 'calendar') handleActivitiesViewChange(v); }}
                   className="hidden sm:inline-flex"
                 >
                   <TabsList>
@@ -903,11 +947,13 @@ export function Dashboard() {
                     ))}
                   </div>
                 )
-              ) : error ? (
-                <div className="card" style={{ padding: 40, textAlign: 'center' }}>
-                  <div style={{ fontSize: '2rem', marginBottom: 12 }}>⚠️</div>
-                  <p style={{ color: 'var(--red-11)', fontWeight: 600, marginBottom: 16 }}>{error}</p>
-                  <Button variant="outline" onClick={() => load()}>Try Again</Button>
+              ) : errorDetails ? (
+                <div className="card p-5 sm:p-7 max-w-xl mx-auto my-4 text-left">
+                  <D4HErrorAlert
+                    error={errorDetails}
+                    onRetry={() => load(false, currentMonth)}
+                    onReconnect={() => navigate('/connect-d4h')}
+                  />
                 </div>
               ) : effectiveActivitiesView === 'calendar' ? (
                 <CalendarView
@@ -1072,6 +1118,15 @@ export function Dashboard() {
           )}
         </main>
       </div>
+
+      <D4HPermissionsModal
+        open={showPermissionsModal}
+        onOpenChange={setShowPermissionsModal}
+        missingPermissions={missingPermissions}
+        teamTitle={teamTitle}
+        onDismiss={handleDismissPermissionsModal}
+      />
+
       <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </Tooltip.Provider>
   );

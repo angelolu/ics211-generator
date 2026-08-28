@@ -1,17 +1,18 @@
-import { AlertCircle, CheckCircle2, ExternalLink, Loader2, LogIn, LogOut, ShieldCheck } from 'lucide-react';
+import { CheckCircle2, ExternalLink, Loader2, LogIn, LogOut, ShieldCheck } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import d4hLogo from '../assets/d4h_tech_orange.png';
-import { getD4HErrorMessage, verifyTokenAndGetContext } from '../api/d4h';
+import { getD4HErrorDetails, verifyTokenAndGetContext } from '../api/d4h';
+import type { D4HErrorDetails } from '../api/d4h';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
+import { D4HErrorAlert } from '../components/D4HErrorAlert';
 
 export function ConnectD4H() {
   useDocumentTitle('Connect to D4H');
   const [token, setToken] = useState('');
-  const [error, setError] = useState('');
+  const [errorDetails, setErrorDetails] = useState<D4HErrorDetails | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isExiting, setIsExiting] = useState(false);
   const [currentTeam, setCurrentTeam] = useState<string | null>(null);
@@ -31,23 +32,27 @@ export function ConnectD4H() {
   const handleConnect = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!token.trim()) {
-      setError('Please enter a valid token');
+      setErrorDetails({
+        title: 'Missing Token',
+        message: 'Please enter a valid personal access token from your D4H account.',
+      });
       return;
     }
     setIsLoading(true);
-    setError('');
+    setErrorDetails(null);
     try {
       localStorage.setItem('d4h_token', token.trim());
       const context = await verifyTokenAndGetContext();
       localStorage.setItem('d4h_context_id', context.contextId.toString());
       localStorage.setItem('d4h_team_title', context.title);
       localStorage.removeItem('d4h_skip_login');
+      sessionStorage.removeItem(`fitnessqual_dismissed_perms_${context.contextId}`);
       setIsExiting(true);
       setTimeout(() => {
         navigate('/dashboard');
       }, 650);
     } catch (err: any) {
-      setError(getD4HErrorMessage(err, 'Failed to authenticate with D4H'));
+      setErrorDetails(getD4HErrorDetails(err, 'Failed to authenticate with D4H'));
       localStorage.removeItem('d4h_token');
       localStorage.removeItem('d4h_context_id');
       localStorage.removeItem('d4h_team_title');
@@ -108,11 +113,8 @@ export function ConnectD4H() {
         )}
 
         {/* Error Alert */}
-        {error && (
-          <Alert variant="destructive" className="mb-4">
-            <AlertCircle className="size-4" />
-            <AlertDescription>{error}</AlertDescription>
-          </Alert>
+        {errorDetails && (
+          <D4HErrorAlert error={errorDetails} className="mb-4" />
         )}
 
         {/* Wizard Steps Form */}
